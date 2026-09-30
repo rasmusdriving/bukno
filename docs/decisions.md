@@ -2,6 +2,8 @@
 
 Recorded 30 September 2026 from the project conversation.
 
+Project name: Bukno, pronounced “Buck-no”. License: Apache 2.0, superseding the earlier noncommercial proposal. Commercial use is allowed.
+
 ## Agreed
 
 1. Build a lightweight native interface, with Rust as the implementation direction.

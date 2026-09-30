@@ -1,4 +1,4 @@
-# Native Codex and Claude interface: feature map
+# Bukno: feature map
 
 Research draft, 30 September 2026. This is a proposed product scope and architecture, not an implemented application or a claim of complete desktop-app parity.
 

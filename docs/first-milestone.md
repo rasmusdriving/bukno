@@ -22,4 +22,4 @@ Both engines can edit a disposable repository, show a diff, handle permission de
 
 Treat GUI idle below 100 MiB and a basic GUI-plus-Codex workload below 500 MiB as initial targets, not promises. Measure Claude before choosing its total budget. Compare the same workload with the existing desktop app.
 
-Save human-reviewable results under `/Volumes/TOSHIBA Workspace/dev/artifacts/native-agent-client/`. No implementation or tests were created as part of project setup.
+Save human-reviewable results under `/Volumes/TOSHIBA Workspace/dev/artifacts/bukno/`. No implementation or tests were created as part of project setup.

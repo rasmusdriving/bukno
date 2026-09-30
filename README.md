@@ -1,6 +1,6 @@
-# Native Agent Client
+# Bukno
 
-A lightweight, open-source native interface for Codex and Claude Code. Working name; planning stage, no application implementation yet.
+A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Planning stage, no application implementation yet.
 
 ## Agreed architecture
 
@@ -23,3 +23,9 @@ A lightweight, open-source native interface for Codex and Claude Code. Working n
 Planning and source/schema research are complete enough to start the compatibility milestone. Authentication, inference, voice, dictation, and a replacement UI have not been tested end to end. Memory figures in the plan are targets or observations from the existing desktop app, not replacement-app results.
 
 Development starts with the [first milestone](docs/first-milestone.md). Keep source and manifests here; install tools and dependency directories on the internal drive as directed in [AGENTS.md](AGENTS.md).
+
+## License
+
+Copyright 2026 Rasmus Driving. Licensed under the [Apache License 2.0](LICENSE). Commercial use, modification, and redistribution are permitted under its terms. No noncommercial restriction applies. Contributions are accepted under the same license.
+
+Third-party material retains its original licensing; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
