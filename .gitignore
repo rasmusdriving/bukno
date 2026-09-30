@@ -1,0 +1,21 @@
+# Local machine metadata and secrets
+.DS_Store
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Dependencies and generated output
+node_modules/
+.venv/
+venv/
+target/
+dist/
+coverage/
+*.log
+
+# Local sessions and credentials
+.local/
+credentials/
+transcripts/
