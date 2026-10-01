@@ -105,6 +105,8 @@ Motion makes real work legible. It is short, interruptible and tied to events.
 
 With reduced motion, every loop stops and the same glyphs and words remain. Stop repainting when the window is hidden, minimised or idle.
 
+**Proposed, not approved:** two cheaper working treatments to replace the orb, `BuildGrid` (stepped blocks) and `StreakLabel` (a soft light through the activity words, which would change the "never shimmers" rule above). See [08-working-animation-proposal.md](../08-working-animation-proposal.md).
+
 ## Provider identity
 
 - The chat's owning provider is shown by its mark on the right of the sidebar row and by the coloured provider name on each reply and task.
@@ -127,7 +129,7 @@ The provider marks in `ProviderMark` are **placeholders** (a hexagon for Codex, 
 - **Navigation:** `SectionLabel`, `ProjectRow`, `ChatRow`, `UsageMeter`, `ProfileRow`, `Breadcrumb`.
 - **Conversation:** `UserMessage`, `AgentTurn`, `PlanStep`, `ActivityLine`, `CodeBlock`, `Notice`, `TaskBrief`, `EventLine`.
 - **Composer:** `Composer`, `PermissionControl`, `ModelControl`, `ModelPicker`, `EffortSlider`, `ChangeStrip`, `ApprovalCard`.
-- **Working and planning:** `ThinkingOrb`, `WorkingIndicator`, `TodoList`.
+- **Working and planning:** `ThinkingOrb`, `WorkingIndicator`, `TodoList`. Proposed: `BuildGrid`, `StreakLabel`.
 - **Delegation and setup:** `TaskRow`, `EngineCard`.
 
 Each component's guidelines say what the consumer provides. Screens and layout are the consumer's; the components only draw themselves.

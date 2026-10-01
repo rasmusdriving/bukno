@@ -11,6 +11,7 @@ For Codex, Claude or anyone implementing the interface:
 3. [journey/screens/](journey/screens/): one image per screen, in journey order (table below).
 4. `system/components/<Name>/README.md`: what each component shows, what it needs, and when to use it. Props are listed in [system/components/index.d.ts](system/components/index.d.ts).
 5. [07-claude-design-pass.md](07-claude-design-pass.md): what changed from the original mockup and why.
+6. [08-working-animation-proposal.md](08-working-animation-proposal.md): proposed replacements for the working orb, with measured cost. Not approved yet.
 
 ## Things to keep in mind
 

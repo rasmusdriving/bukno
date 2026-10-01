@@ -1,4 +1,4 @@
-<!-- @dsCard group="Conversation" height=300 -->
+<!-- @dsCard group="Conversation" height=370 -->
 <!doctype html>
 <html>
 <head><meta charset="utf-8"><title>WorkingIndicator preview</title></head>
@@ -7,6 +7,7 @@
 <script>
   var B = window.Bukno, h = React.createElement;
   ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '640px', display: 'flex', flexDirection: 'column', gap: '26px' } },
+    h(B.WorkingIndicator, { mark: 'grid', provider: 'codex', state: 'thinking', activity: 'Thinking', time: '0m 12s', summary: 'Proposed BuildGrid mark. Working out how drafts are restored when you switch chats.' }),
     h(B.WorkingIndicator, { provider: 'codex', state: 'thinking', activity: 'Thinking', time: '0m 12s', summary: 'Working out how drafts are restored when you switch chats.' }),
     h(B.WorkingIndicator, { provider: 'codex', state: 'reading', activity: 'Reading the composer module', time: '0m 40s' }),
     h(B.WorkingIndicator, { provider: 'codex', state: 'tool', activity: 'Testing draft recovery', time: '2m 14s', trail: ['Ran cargo check', 'Edited composer.rs +42 \u22123'] }),

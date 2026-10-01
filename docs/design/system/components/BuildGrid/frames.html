@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>BuildGrid frames</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../bundle.js"></script>
+<style>
+  body { margin: 0; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); }
+  .wrap { padding: 28px 32px; display: flex; flex-direction: column; gap: 22px; }
+  .row { display: flex; align-items: center; gap: 18px; }
+  .name { width: 92px; font-size: 13px; color: var(--text-secondary); }
+  .step { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; }
+  .n { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+  .ctx { margin-top: 6px; width: 760px; }
+</style>
+</head>
+<body>
+<div class="wrap bk-root" id="root"></div>
+<script>
+  // Every step of each state at 32px, then the mark in context. One step is 160ms.
+  var B = window.Bukno, h = React.createElement;
+  var rows = [['thinking', 16, 'codex'], ['reading', 4, 'codex'], ['tool', 8, 'codex'], ['thinking', 8, 'claude'], ['waiting', 1, 'codex']];
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null,
+    rows.map(function (r, i) {
+      var steps = []; for (var s = 0; s < r[1]; s++) steps.push(s);
+      return h('div', { className: 'row', key: i },
+        h('span', { className: 'name' }, r[0] + (r[2] === 'claude' ? ' (Claude)' : '')),
+        steps.map(function (s) { return h('span', { className: 'step', key: s }, h(B.BuildGrid, { provider: r[2], state: r[0], size: 32, still: true, step: s }), h('span', { className: 'n' }, s * 160 + 'ms')); }));
+    }),
+    h('div', { className: 'ctx' }, h(B.WorkingIndicator, { mark: 'grid', provider: 'codex', state: 'thinking', still: true, activity: 'Testing draft recovery', time: '2m 14s', summary: 'Checking that an unsent draft survives switching to another chat and back.' }))));
+</script>
+</body>
+</html>

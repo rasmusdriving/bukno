@@ -76,6 +76,8 @@
   --loop-working: 2400ms;
   --loop-breathe: 3200ms;
   --loop-shimmer: 2800ms;
+  --loop-streak: 2200ms;
+  --step-working: 160ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --font-sans: Geist, "SF Pro Text", "Segoe UI Variable Text", system-ui, sans-serif;

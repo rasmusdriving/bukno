@@ -91,6 +91,12 @@ Options for Rasmus: accept about 5 % at 20 fps; pick a lower rate after
 looking at it (`BUKNO_ORB_FPS=12` with `--scenario working`); or ask for a
 Pass 3 experiment with a separately composited native layer for the orb.
 
+Follow-up the same day: two cheaper treatments are proposed in
+[design/08-working-animation-proposal.md](design/08-working-animation-proposal.md).
+Measured the same way, the stepped BuildGrid uses 1.7 to 2.1 % and the
+StreakLabel at 12 fps uses 3.1 to 3.4 %. Both are behind
+`BUKNO_WORKING_MARK` until one is approved.
+
 ## Deviations from the design, recorded rather than hidden
 
 - **Text selection colour**: not in `tokens.json`. Uses `focus` at 28 %

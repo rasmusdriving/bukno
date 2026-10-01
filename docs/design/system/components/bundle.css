@@ -317,6 +317,7 @@ body { margin: 0; background: var(--surface-canvas); color: var(--text-primary);
 
 /* Working indicator: the quiet live line at the end of the transcript while an agent works */
 .bk-orb { display: block; flex: none; }
+.bk-grid { display: block; flex: none; }
 .bk-working { display: flex; align-items: flex-start; gap: 12px; padding: 2px 0; }
 .bk-working__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 6px; }
 .bk-working__row { display: flex; align-items: baseline; gap: 8px; }
@@ -326,7 +327,15 @@ body { margin: 0; background: var(--surface-canvas); color: var(--text-primary);
 .bk-working__summary { margin: 0; max-width: 600px; font-size: 13px; line-height: 20px; color: var(--text-secondary); animation: bk-fade var(--dur-settle) var(--ease-standard) both; }
 .bk-working__trail { margin: 0; font-size: 12px; line-height: 18px; color: var(--text-tertiary); }
 @keyframes bk-fade { from { opacity: 0; } to { opacity: 1; } }
+/* Proposed: StreakLabel. The activity words in a quiet tone with a soft light passing through them. */
+.bk-streak { --streak-core: color-mix(in srgb, var(--text-primary) 72%, var(--codex)); --streak-rest: var(--text-tertiary); --streak-width: 120px; display: inline-block; color: transparent; background-image: linear-gradient(100deg, transparent 0%, color-mix(in srgb, var(--streak-core) 50%, transparent) 30%, var(--streak-core) 50%, color-mix(in srgb, var(--streak-core) 50%, transparent) 70%, transparent 100%), linear-gradient(var(--streak-rest), var(--streak-rest)); background-size: var(--streak-width) 100%, 100% 100%; background-repeat: no-repeat; background-position: calc(-1 * var(--streak-width)) 0, 0 0; -webkit-background-clip: text; background-clip: text; animation: bk-streak var(--loop-streak) linear infinite; }
+.bk-streak--claude { --streak-core: color-mix(in srgb, var(--text-primary) 72%, var(--claude)); }
+.bk-streak--still { animation-play-state: paused; }
+.bk-streak--waiting { animation: none; background: none; color: var(--text-secondary); }
+@keyframes bk-streak { from { background-position: calc(-1 * var(--streak-width)) 0, 0 0; } to { background-position: calc(100% + var(--streak-width)) 0, 0 0; } }
+.bk-working--streak .bk-working__text { padding-top: 0; }
 @media (prefers-reduced-motion: reduce) {
+  .bk-streak { animation: none !important; background: none !important; color: var(--text-primary) !important; }
   .bk-working__label, .bk-working__summary, .bk-effortlg__glint, .bk-effortlg--max .bk-effortlg__track { animation: none !important; }
 }
 

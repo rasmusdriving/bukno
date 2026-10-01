@@ -109,7 +109,15 @@ export interface ThinkingOrbProps { provider: Provider; state?: 'thinking' | 're
 export declare function ThinkingOrb(props: ThinkingOrbProps): React.ReactElement;
 
 /** The quiet live line at the end of the transcript while an agent works. */
-export interface WorkingIndicatorProps { provider: Provider; state?: 'thinking' | 'reading' | 'tool' | 'waiting'; activity?: string; summary?: string; trail?: Array<string | { text: string }>; time?: string; size?: number; still?: boolean }
+/** Proposed replacement for ThinkingOrb: a stepped 3 by 3 block grid. */
+export interface BuildGridProps { provider: Provider; state?: 'thinking' | 'reading' | 'tool' | 'waiting'; size?: number; still?: boolean; step?: number; label?: string }
+export declare function BuildGrid(props: BuildGridProps): React.ReactElement;
+
+/** Proposed working treatment: the activity words with a soft light passing through. */
+export interface StreakLabelProps { provider: Provider; state?: 'thinking' | 'reading' | 'tool' | 'waiting'; text?: string; children?: React.ReactNode; still?: boolean; phase?: number }
+export declare function StreakLabel(props: StreakLabelProps): React.ReactElement;
+
+export interface WorkingIndicatorProps { mark?: 'orb' | 'grid' | 'streak'; phase?: number; provider: Provider; state?: 'thinking' | 'reading' | 'tool' | 'waiting'; activity?: string; summary?: string; trail?: Array<string | { text: string }>; time?: string; size?: number; still?: boolean }
 export declare function WorkingIndicator(props: WorkingIndicatorProps): React.ReactElement;
 
 /** The selected agent's plan in the right panel, under Delegated work. */
@@ -135,7 +143,7 @@ declare global {
       SectionLabel: typeof SectionLabel; ChatRow: typeof ChatRow; ProjectRow: typeof ProjectRow; UsageMeter: typeof UsageMeter; ProfileRow: typeof ProfileRow;
       UserMessage: typeof UserMessage; AgentTurn: typeof AgentTurn; PlanStep: typeof PlanStep; ActivityLine: typeof ActivityLine; CodeBlock: typeof CodeBlock; Notice: typeof Notice; TaskBrief: typeof TaskBrief; EventLine: typeof EventLine; Breadcrumb: typeof Breadcrumb;
       Composer: typeof Composer; PermissionControl: typeof PermissionControl; ModelControl: typeof ModelControl; ModelPicker: typeof ModelPicker; EffortSlider: typeof EffortSlider;
-      ChangeStrip: typeof ChangeStrip; ApprovalCard: typeof ApprovalCard; ThinkingOrb: typeof ThinkingOrb; WorkingIndicator: typeof WorkingIndicator; TaskRow: typeof TaskRow; TodoList: typeof TodoList; Menu: typeof Menu; EngineCard: typeof EngineCard;
+      ChangeStrip: typeof ChangeStrip; ApprovalCard: typeof ApprovalCard; ThinkingOrb: typeof ThinkingOrb; BuildGrid: typeof BuildGrid; StreakLabel: typeof StreakLabel; WorkingIndicator: typeof WorkingIndicator; TaskRow: typeof TaskRow; TodoList: typeof TodoList; Menu: typeof Menu; EngineCard: typeof EngineCard;
       iconNames: string[];
     };
   }

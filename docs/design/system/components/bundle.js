@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"Bukno","components":[{"name":"Icon"},{"name":"ProviderMark"},{"name":"StatusGlyph"},{"name":"StateChip"},{"name":"Button"},{"name":"IconButton"},{"name":"Kbd"},{"name":"Switch"},{"name":"SectionLabel"},{"name":"ChatRow"},{"name":"ProjectRow"},{"name":"UsageMeter"},{"name":"ProfileRow"},{"name":"UserMessage"},{"name":"AgentTurn"},{"name":"PlanStep"},{"name":"ActivityLine"},{"name":"CodeBlock"},{"name":"Notice"},{"name":"TaskBrief"},{"name":"EventLine"},{"name":"Breadcrumb"},{"name":"Composer"},{"name":"PermissionControl"},{"name":"ModelControl"},{"name":"ModelPicker"},{"name":"EffortSlider"},{"name":"ChangeStrip"},{"name":"ApprovalCard"},{"name":"ThinkingOrb"},{"name":"WorkingIndicator"},{"name":"TaskRow"},{"name":"TodoList"},{"name":"Menu"},{"name":"EngineCard"}]} */
+/* @ds-bundle: {"format":4,"namespace":"Bukno","components":[{"name":"Icon"},{"name":"ProviderMark"},{"name":"StatusGlyph"},{"name":"StateChip"},{"name":"Button"},{"name":"IconButton"},{"name":"Kbd"},{"name":"Switch"},{"name":"SectionLabel"},{"name":"ChatRow"},{"name":"ProjectRow"},{"name":"UsageMeter"},{"name":"ProfileRow"},{"name":"UserMessage"},{"name":"AgentTurn"},{"name":"PlanStep"},{"name":"ActivityLine"},{"name":"CodeBlock"},{"name":"Notice"},{"name":"TaskBrief"},{"name":"EventLine"},{"name":"Breadcrumb"},{"name":"Composer"},{"name":"PermissionControl"},{"name":"ModelControl"},{"name":"ModelPicker"},{"name":"EffortSlider"},{"name":"ChangeStrip"},{"name":"ApprovalCard"},{"name":"ThinkingOrb"},{"name":"BuildGrid"},{"name":"StreakLabel"},{"name":"WorkingIndicator"},{"name":"TaskRow"},{"name":"TodoList"},{"name":"Menu"},{"name":"EngineCard"}]} */
 (function () {
   var React = window.React;
   var h = React.createElement;
@@ -644,17 +644,107 @@
     });
   }
 
+  /* ---------- Build grid (proposed replacement for ThinkingOrb) ---------- */
+  // Nine small blocks on a 3 by 3 grid. Work is "placed" one block at a time,
+  // in hard steps of --step-working (160ms), so it looks deliberate at about
+  // six changes a second and costs a native renderer six frames, not sixty.
+  // Levels: 0 = empty block, 1 = faint trace, 2 = placed (warm neutral),
+  // 3 = the newest block in the provider colour.
+  var GRID_PATH = [0, 1, 2, 5, 4, 3, 6, 7, 8, 7, 6, 3, 4, 5, 2, 1];
+  var GRID_RING = [0, 1, 2, 5, 8, 7, 6, 3];
+  var GRID_STATES = { thinking: 'Thinking', reading: 'Reading', tool: 'Working', waiting: 'Waiting for you' };
+  function gridLevels(state, step) {
+    var lv = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    var n, k;
+    if (state === 'reading') {
+      // Rows light top to bottom, like lines being read, then a short rest.
+      k = step % 4;
+      for (n = 0; n < 3; n++) {
+        if (k < 3) lv[k * 3 + n] = 3;
+        if (k > 0 && k - 1 < 3) lv[(k - 1) * 3 + n] = Math.max(lv[(k - 1) * 3 + n], 1);
+      }
+    } else if (state === 'tool') {
+      // A held centre with one block turning around it, like a gear.
+      lv[4] = 2;
+      k = step % GRID_RING.length;
+      lv[GRID_RING[k]] = 3;
+      lv[GRID_RING[(k + GRID_RING.length - 1) % GRID_RING.length]] = 1;
+    } else if (state === 'waiting') {
+      // Still and neutral: the work is paused until you answer.
+      lv = [1, 0, 1, 0, 2, 0, 1, 0, 1];
+    } else {
+      // Thinking: a short trail walks the grid and turns back at each end.
+      for (n = 0; n < 3; n++) {
+        k = GRID_PATH[(step - n + GRID_PATH.length * 4) % GRID_PATH.length];
+        lv[k] = Math.max(lv[k], 3 - n);
+      }
+    }
+    return lv;
+  }
+  function BuildGrid(p) {
+    var size = num(p.size, 32);
+    var state = GRID_STATES[p.state] ? p.state : 'thinking';
+    var provider = p.provider === 'claude' ? 'claude' : 'codex';
+    var still = on(p.still) || state === 'waiting';
+    var stepState = React.useState(num(p.step, 2));
+    var step = stepState[0], setStep = stepState[1];
+    React.useEffect(function () {
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (still || reduce) return undefined;
+      var ms = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--step-working')) || 160;
+      var id = window.setInterval(function () { setStep(function (s) { return s + 1; }); }, ms);
+      return function () { window.clearInterval(id); };
+    }, [still, state]);
+    var lv = gridLevels(state, step);
+    var cell = size * 0.1875, gap = size * 0.09375, inset = (size - cell * 3 - gap * 2) / 2;
+    var fills = ['var(--surface-raised)', 'var(--text-disabled)', 'var(--text-secondary)', providerVar(provider)];
+    if (state === 'waiting') fills[3] = 'var(--text-secondary)';
+    var rects = lv.map(function (l, i) {
+      return h('rect', { key: i, x: inset + (i % 3) * (cell + gap), y: inset + Math.floor(i / 3) * (cell + gap), width: cell, height: cell, rx: cell * 0.28, fill: fills[l] });
+    });
+    return h('svg', {
+      className: cx('bk-grid', p.className), width: size, height: size, viewBox: '0 0 ' + size + ' ' + size,
+      role: 'img', 'aria-label': p.label || (providerName(provider) + ': ' + GRID_STATES[state])
+    }, rects);
+  }
+
+  /* ---------- Streak label (proposed working treatment) ---------- */
+  // The activity words themselves show the work: quiet text with a soft light
+  // passing through once per --loop-streak, its core touched by the provider
+  // colour. Soft and slow, so a native renderer can run it at a low frame rate
+  // without visible judder. No separate moving mark.
+  function StreakLabel(p) {
+    var provider = p.provider === 'claude' ? 'claude' : 'codex';
+    var waiting = p.state === 'waiting';
+    var style = {};
+    if (p.phase != null) {
+      var dur = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--loop-streak')) || 2200;
+      style.animationDelay = (-num(p.phase, 0) * dur) + 'ms';
+    }
+    return h('span', {
+      className: cx('bk-streak', provider === 'claude' && 'bk-streak--claude', (on(p.still) || p.phase != null) && 'bk-streak--still', waiting && 'bk-streak--waiting', p.className),
+      style: style
+    }, p.children || p.text);
+  }
+
   /* ---------- Working indicator ---------- */
   function WorkingIndicator(p) {
     var provider = p.provider === 'claude' ? 'claude' : 'codex';
     var state = p.state || 'thinking';
     var label = p.activity || ORB_STATES[state] || 'Thinking';
     var trail = list(p.trail).map(function (t) { return typeof t === 'string' ? t : t.text; });
-    return h('div', { className: cx('bk-working', 'bk-working--' + state), role: 'status', 'aria-live': 'polite' },
-      h(ThinkingOrb, { provider: provider, state: state, size: num(p.size, 32), still: p.still }),
+    var streak = p.mark === 'streak';
+    var mark = streak ? null : p.mark === 'grid'
+      ? h(BuildGrid, { provider: provider, state: state, size: num(p.size, 32), still: p.still })
+      : h(ThinkingOrb, { provider: provider, state: state, size: num(p.size, 32), still: p.still });
+    var labelNode = streak
+      ? h(StreakLabel, { key: label, className: 'bk-working__label', provider: provider, state: state, still: p.still, phase: p.phase }, label)
+      : h('span', { key: label, className: 'bk-working__label' }, label);
+    return h('div', { className: cx('bk-working', 'bk-working--' + state, streak && 'bk-working--streak'), role: 'status', 'aria-live': 'polite' },
+      mark,
       h('div', { className: 'bk-working__text' },
         h('div', { className: 'bk-working__row' },
-          h('span', { key: label, className: 'bk-working__label' }, label),
+          labelNode,
           p.time ? h('span', { className: 'bk-working__time' }, p.time) : null),
         p.summary ? h('p', { key: p.summary, className: 'bk-working__summary' }, p.summary) : null,
         trail.length ? h('p', { className: 'bk-working__trail' }, trail.join(' · ')) : null));
@@ -808,7 +898,7 @@
     SectionLabel: SectionLabel, ChatRow: ChatRow, ProjectRow: ProjectRow, UsageMeter: UsageMeter, ProfileRow: ProfileRow,
     UserMessage: UserMessage, AgentTurn: AgentTurn, PlanStep: PlanStep, ActivityLine: ActivityLine, CodeBlock: CodeBlock, Notice: Notice, TaskBrief: TaskBrief, EventLine: EventLine, Breadcrumb: Breadcrumb,
     Composer: Composer, PermissionControl: PermissionControl, ModelControl: ModelControl, ModelPicker: ModelPicker, EffortSlider: EffortSlider,
-    ChangeStrip: ChangeStrip, ApprovalCard: ApprovalCard, ThinkingOrb: ThinkingOrb, WorkingIndicator: WorkingIndicator, TaskRow: TaskRow, TodoList: TodoList, Menu: Menu, EngineCard: EngineCard,
+    ChangeStrip: ChangeStrip, ApprovalCard: ApprovalCard, ThinkingOrb: ThinkingOrb, BuildGrid: BuildGrid, StreakLabel: StreakLabel, WorkingIndicator: WorkingIndicator, TaskRow: TaskRow, TodoList: TodoList, Menu: Menu, EngineCard: EngineCard,
     iconNames: Object.keys(ICONS)
   };
   window.Bukno = Object.assign(window.Bukno || {}, api);

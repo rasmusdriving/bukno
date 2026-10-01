@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>StreakLabel frames</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../../tokens.css">
+<link rel="stylesheet" href="../bundle.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../bundle.js"></script>
+<style>
+  body { margin: 0; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); }
+  .wrap { padding: 28px 32px; display: grid; grid-template-columns: 70px 1fr; gap: 14px 18px; align-items: center; width: 720px; }
+  .n { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap bk-root" id="root"></div>
+<script>
+  // One pass of the light, frozen at nine points (2200ms per pass), Codex then Claude.
+  var B = window.Bukno, h = React.createElement;
+  var phases = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+  var rows = [];
+  phases.forEach(function (ph, i) {
+    var provider = i < 6 ? 'codex' : 'claude';
+    rows.push(h('span', { className: 'n', key: 'n' + i }, Math.round(ph * 2200) + 'ms'));
+    rows.push(h('div', { key: 'w' + i }, h(B.WorkingIndicator, { mark: 'streak', provider: provider, state: 'reading', phase: ph, activity: provider === 'codex' ? 'Reading the composer module' : 'Running cargo test -p bukno-ui', time: '0m 40s' })));
+  });
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment, null, rows));
+</script>
+</body>
+</html>
