@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Connection lost on Windows</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/bukno/tokens.css">
+<link rel="stylesheet" href="ds/bukno/components/bundle.css">
+<script src="ds/bukno/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#252422}
+</style>
+</helmet>
+<div class="bk-root" style="width: 1440px; height: 900px; display: flex; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden">
+<dc-import name="Sidebar" sel="windows" polish="idle" platform="windows" hint-size="264px,900px"></dc-import>
+<main style="flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface-canvas)">
+<header style="height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 24px">
+<div style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary)">
+<span class="t-small">Bukno</span>
+<span class="t-small" style="color: var(--text-tertiary)">/</span>
+<x-import component-from-global-scope="Bukno.Icon" name="branch" size="14"></x-import>
+<span class="t-small">windows-startup</span>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<x-import component-from-global-scope="Bukno.IconButton" icon="more" label="Chat options" size="sm"></x-import>
+<x-import component-from-global-scope="Bukno.IconButton" icon="panel-right" label="Hide the right panel" size="sm" active="{{yes}}"></x-import>
+</div>
+</header>
+<div style="flex: 1; min-height: 0; display: flex; justify-content: center; padding: 20px 40px 0; overflow: hidden">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 14px">
+<h1 class="t-title" style="margin: 0">Windows startup</h1>
+<x-import component-from-global-scope="Bukno.StateChip" state="unknown"></x-import>
+</div>
+<x-import component-from-global-scope="Bukno.UserMessage">Make Bukno start at login on Windows, and keep it out of the taskbar until it is opened.</x-import>
+<x-import component-from-global-scope="Bukno.AgentTurn" provider="claude" meta="Opus 5.5 · Medium">
+<p>I'll add a startup entry for the current user and a tray icon. The tray icon is done; next is the startup entry.</p>
+</x-import>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<x-import component-from-global-scope="Bukno.EventLine" state="done">Reconnected to <strong>Claude Code</strong> after 8 seconds</x-import>
+<x-import component-from-global-scope="Bukno.Notice" tone="unknown" title="Outcome unknown" text="The connection dropped while Claude was editing crates/app/src/startup.rs, 2 minutes ago. That step may have finished. Bukno will not send anything again until you choose." actions="{{actions}}"></x-import>
+</div>
+</div>
+</div>
+<div style="flex: none; display: flex; justify-content: center; padding: 12px 40px 12px">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 6px">
+<x-import component-from-global-scope="Bukno.ChangeStrip" status="Last event 2 min ago" added="12" removed="0"></x-import>
+<x-import component-from-global-scope="Bukno.Composer" provider="claude" model="Opus 5.5" effort="Medium" level="3" fast="{{no}}" permission="Ask before changes" placeholder="Tell Claude how to continue"></x-import>
+</div>
+</div>
+</main>
+<aside aria-label="To-do" style="width: 336px; flex: none; display: flex; flex-direction: column; background: var(--surface-panel)">
+<div aria-hidden="true" style="height: 44px; flex: none; display: flex; justify-content: flex-end; color: var(--text-secondary)">
+<span style="width: 46px; height: 44px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"></path></svg></span>
+<span style="width: 46px; height: 44px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9" rx="1"></rect></svg></span>
+<span style="width: 46px; height: 44px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0 0 10"></path></svg></span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px; padding: 24px 24px 0">
+<x-import component-from-global-scope="Bukno.TodoList" provider="claude" agent="Claude" task="Windows startup" steps="{{todo}}"></x-import>
+</div>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+yes: true,
+no: false,
+actions: [{ label: 'Check what changed', variant: 'primary' }, { label: 'Continue from here' }],
+todo: [
+{ state: 'done', title: 'Read the startup code' },
+{ state: 'done', title: 'Add the tray icon' },
+{ state: 'pending', title: 'Register the startup entry', detail: 'Outcome unknown after the connection dropped.' },
+{ state: 'pending', title: 'Test sign-in at login' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

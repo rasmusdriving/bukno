@@ -1,0 +1,12 @@
+<!-- @dsCard group="Conversation" height=72 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Breadcrumb preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(B.Breadcrumb, { items: [{ label: 'Polish the composer', provider: 'codex' }, { label: 'Review keyboard navigation' }] }));
+</script>
+</body>
+</html>

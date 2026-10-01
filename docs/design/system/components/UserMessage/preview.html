@@ -1,0 +1,15 @@
+<!-- @dsCard group="Conversation" height=200 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>UserMessage preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '560px', display: 'flex', flexDirection: 'column', gap: '12px' } },
+  h(B.UserMessage, null, 'Improve the composer and ask Claude to review keyboard navigation.'),
+  h(B.UserMessage, { files: [{ name: 'composer-notes.md' }, { name: 'focus-order.png', icon: 'image' }] }, 'Use these notes.'),
+  h(B.UserMessage, { note: 'Queued for Codex\u2019s next step', noteIcon: 'clock' }, 'Keep the old placeholder text for now.')));
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!-- @dsCard group="Identity and state" height=80 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>StateChip preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { gap: '24px' } },
+  h(B.StateChip, { state: 'working', provider: 'codex', time: '2m 14s' }),
+  h(B.StateChip, { state: 'waiting', label: 'Needs approval' }),
+  h(B.StateChip, { state: 'done', time: '6m 02s' }),
+  h(B.StateChip, { state: 'unknown' }),
+  h(B.StateChip, { state: 'reconnecting', label: 'Reconnecting' })));
+</script>
+</body>
+</html>

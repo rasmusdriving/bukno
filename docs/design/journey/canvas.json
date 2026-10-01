@@ -1,0 +1,219 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-09-30T20:12:00Z"
+  },
+  "title": "Bukno User Journey",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "1.1 Check the engines"
+    },
+    "StartChat.dc.html": {
+      "x": 1520,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "1.2 Start a chat without a project"
+    },
+    "PickModel.dc.html": {
+      "x": 3040,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "1.3 Open the picker: effort first",
+      "is_interactive": true
+    },
+    "CodexWorking.dc.html": {
+      "x": 0,
+      "y": 1280,
+      "w": 1440,
+      "h": 900,
+      "title": "2.1 Codex at work"
+    },
+    "Approval.dc.html": {
+      "x": 1520,
+      "y": 1280,
+      "w": 1440,
+      "h": 900,
+      "title": "2.2 Approve a command"
+    },
+    "Steer.dc.html": {
+      "x": 3040,
+      "y": 1280,
+      "w": 1440,
+      "h": 900,
+      "title": "2.3 Add a direction mid-run"
+    },
+    "TaskNeedsYou.dc.html": {
+      "x": 0,
+      "y": 2560,
+      "w": 1440,
+      "h": 900,
+      "title": "3.1 A delegated task needs you"
+    },
+    "ChildTask.dc.html": {
+      "x": 1520,
+      "y": 2560,
+      "w": 1440,
+      "h": 900,
+      "title": "3.2 Open the task and follow up"
+    },
+    "RevisedResult.dc.html": {
+      "x": 3040,
+      "y": 2560,
+      "w": 1440,
+      "h": 900,
+      "title": "3.3 Back at the parent, revised result arrives"
+    },
+    "ReviewChanges.dc.html": {
+      "x": 0,
+      "y": 3840,
+      "w": 1440,
+      "h": 900,
+      "title": "4.1 Done, review the changes"
+    },
+    "ProfileUsage.dc.html": {
+      "x": 1520,
+      "y": 3840,
+      "w": 1440,
+      "h": 900,
+      "title": "4.2 Profile, accounts and usage"
+    },
+    "ConnectionLost.dc.html": {
+      "x": 3040,
+      "y": 3840,
+      "w": 1440,
+      "h": 900,
+      "title": "4.3 Connection lost (Windows)"
+    },
+    "NarrowWindow.dc.html": {
+      "x": 0,
+      "y": 5120,
+      "w": 1024,
+      "h": 720,
+      "title": "5.1 Narrow window"
+    },
+    "Sidebar.dc.html": {
+      "x": 1184,
+      "y": 5120,
+      "w": 264,
+      "h": 900,
+      "title": "Part: sidebar"
+    },
+    "ModelList.dc.html": {
+      "x": 4560,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "1.4 Choose from ChatGPT or Claude models",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "StartChat.dc.html",
+    "PickModel.dc.html",
+    "ModelList.dc.html",
+    "CodexWorking.dc.html",
+    "Approval.dc.html",
+    "Steer.dc.html",
+    "TaskNeedsYou.dc.html",
+    "ChildTask.dc.html",
+    "RevisedResult.dc.html",
+    "ReviewChanges.dc.html",
+    "ProfileUsage.dc.html",
+    "ConnectionLost.dc.html",
+    "NarrowWindow.dc.html",
+    "Sidebar.dc.html"
+  ],
+  "notes": {
+    "row1": {
+      "x": 0,
+      "y": -260,
+      "text": "1 · Get started",
+      "kind": "title1",
+      "maxW": 6000
+    },
+    "row2": {
+      "x": 0,
+      "y": 1020,
+      "text": "2 · Work with Codex",
+      "kind": "title1",
+      "maxW": 4480
+    },
+    "row3": {
+      "x": 0,
+      "y": 2300,
+      "text": "3 · Delegate and follow up",
+      "kind": "title1",
+      "maxW": 4480
+    },
+    "row4": {
+      "x": 0,
+      "y": 3580,
+      "text": "4 · Finish and recover",
+      "kind": "title1",
+      "maxW": 4480
+    },
+    "row5": {
+      "x": 0,
+      "y": 4860,
+      "text": "5 · Narrow window and shared parts",
+      "kind": "title1",
+      "maxW": 4480
+    },
+    "story1": {
+      "x": 6080,
+      "y": 0,
+      "w": 400,
+      "fill": "gray",
+      "text": "First run checks the Codex and Claude Code already on this computer. Sign-in stays with each engine. A new chat needs no project. The model control opens on reasoning effort with a thick slider; clicking the model name opens the list of ChatGPT and Claude models. Picking a model also picks the provider, and that stays free until the first message is sent. 1.3 and 1.4 are clickable in Play."
+    },
+    "story2": {
+      "x": 4560,
+      "y": 1280,
+      "w": 400,
+      "fill": "gray",
+      "text": "The chat holds only the conversation. While Codex works, the chat ends with a small dotted orb and one line on what it is doing right now, plus its latest reasoning summary. Only the orb moves, and slowly. Its to-do list sits in the right panel under Delegated work. Approvals dock above the composer. A direction typed mid-run is queued for Codex's next step, and Stop stays one click away."
+    },
+    "story3": {
+      "x": 4560,
+      "y": 2560,
+      "w": 400,
+      "fill": "gray",
+      "text": "Codex hands parts of the job to Claude and to a second Codex worker. A task that needs you lifts in Delegated work and shows in the sidebar. Opening it switches the main pane, the composer and the to-do list to that task without pausing the parent. Back at the parent, Claude's revised result arrives as revision 2. Delegation timing is still to be selected; see the plan."
+    },
+    "story4": {
+      "x": 4560,
+      "y": 3840,
+      "w": 400,
+      "fill": "gray",
+      "text": "When the run finishes, changed files open in your own editor; there is no diff viewer in version one. Usage is cached per provider and account and says when it is stale or unavailable. A dropped connection never resends work blindly."
+    },
+    "story5": {
+      "x": 2000,
+      "y": 5120,
+      "w": 400,
+      "fill": "gray",
+      "text": "Below 1180 points wide, the right panel folds into a header button that opens a sheet with Delegated work and the to-do list. The sidebar collapses next. The sidebar board is the shared part every screen imports."
+    }
+  },
+  "designSystems": [
+    {
+      "title": "Bukno",
+      "namespace": "bukno",
+      "artifact": "https://claude.ai/artifact/93MCTZhdKL3o2re4nKutNa",
+      "version": "1790837099-5448",
+      "copiedAt": "2026-10-01T06:25:00Z"
+    }
+  ]
+}

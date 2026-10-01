@@ -1,0 +1,12 @@
+<!-- @dsCard group="Identity and state" height=96 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Icon preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { color: 'var(--text-secondary)', gap: '18px' } }, B.iconNames.map(function (n) { return h('span', { key: n, title: n }, h(B.Icon, { name: n })); })));
+</script>
+</body>
+</html>

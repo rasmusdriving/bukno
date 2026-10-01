@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Choose a model</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/bukno/tokens.css">
+<link rel="stylesheet" href="ds/bukno/components/bundle.css">
+<script src="ds/bukno/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#252422}
+</style>
+</helmet>
+<div class="bk-root" style="width: 1440px; height: 900px; position: relative; display: flex; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden">
+<dc-import name="Sidebar" sel="new" polish="idle" hint-size="264px,900px"></dc-import>
+<main style="flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface-canvas)">
+<header style="height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 24px">
+<div style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary)">
+<x-import component-from-global-scope="Bukno.Icon" name="folder" size="14"></x-import>
+<span class="t-small">Chat workspace</span>
+</div>
+<x-import component-from-global-scope="Bukno.IconButton" icon="more" label="Chat options" size="sm"></x-import>
+</header>
+<div style="flex: 1; display: flex; justify-content: center; padding: 140px 40px 0">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 20px">
+<h1 class="t-display" style="margin: 0; text-align: center">What should we work on?</h1>
+<x-import component-from-global-scope="Bukno.Composer" provider="codex" model="GPT-6.1 Sol" effort="High" level="4" fast="{{yes}}" model-open="{{yes}}" value="Improve the composer and ask Claude to review keyboard navigation."></x-import>
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 0 6px">
+<button type="button" class="bk-perm" aria-haspopup="menu">
+<x-import component-from-global-scope="Bukno.Icon" name="folder" size="14"></x-import>
+<span>Bukno</span>
+<span class="bk-perm__chev"><x-import component-from-global-scope="Bukno.Icon" name="chevron-down" size="12"></x-import></span>
+</button>
+<span class="t-small" style="color: var(--text-tertiary)">Works in the Bukno project on main</span>
+</div>
+</div>
+</div>
+</main>
+<div style="position: absolute; left: 842px; top: 358px">
+<x-import component-from-global-scope="Bukno.ModelPicker" groups="{{groups}}" view="models" fast="{{yes}}"></x-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const codexDetails = ['Quick, light thinking for simple edits.', 'Balanced for everyday coding.', 'Thinks longer on harder problems.', 'Thinks the longest. Slower, and uses more of your limit.'];
+const claudeDetails = ['Quick answers with little extended thinking.', 'Balanced for everyday work.', 'Thinks longer before acting.', 'Maximum thinking. Slowest, and uses the most of your limit.'];
+return {
+yes: true,
+groups: [
+{ provider: 'codex', models: [
+{ name: 'GPT-6.1 Sol', detail: 'Default for coding', selected: true, levels: ['Low', 'Medium', 'High', 'XHigh'], effort: 'High', details: codexDetails },
+{ name: 'GPT-6.1 Sol Mini', detail: 'Faster, for lighter tasks', levels: ['Low', 'Medium', 'High'], effort: 'Medium', details: codexDetails.slice(0, 3) }
+] },
+{ provider: 'claude', models: [
+{ name: 'Opus 5.5', detail: 'Deep work and review', levels: ['Low', 'Medium', 'High', 'Max'], effort: 'High', details: claudeDetails },
+{ name: 'Sonnet 5.5', detail: 'Everyday tasks', levels: ['Low', 'Medium', 'High'], effort: 'Medium', details: claudeDetails.slice(0, 3), fastAvailable: false }
+] }
+]
+};
+}
+}
+</script>
+</body>
+</html>

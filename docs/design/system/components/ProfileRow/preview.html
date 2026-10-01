@@ -1,0 +1,12 @@
+<!-- @dsCard group="Navigation" height=80 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ProfileRow preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--sidebar bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '240px', display: 'flex', flexDirection: 'column', gap: '8px' } }, h(B.ProfileRow, { name: 'Rasmus' }), h(B.ProfileRow, { name: 'Rasmus', open: true })));
+</script>
+</body>
+</html>

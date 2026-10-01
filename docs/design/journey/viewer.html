@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bukno user journey</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<link rel="stylesheet" href="../system/tokens.css">
+<link rel="stylesheet" href="../system/components/bundle.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../system/components/bundle.js"></script>
+<style>
+  body { margin: 0; background: #1b1a19; }
+  .jv-index { max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; font-family: var(--font-sans); color: var(--text-primary); }
+  .jv-index h1 { margin: 0 0 6px; font-size: 28px; line-height: 34px; font-weight: 600; letter-spacing: -0.02em; }
+  .jv-index > p { margin: 0 0 32px; max-width: 680px; font-size: 14px; line-height: 22px; color: var(--text-secondary); }
+  .jv-row { margin: 0 0 36px; }
+  .jv-row h2 { margin: 0 0 12px; font-size: 15px; line-height: 22px; font-weight: 600; }
+  .jv-row p { margin: -6px 0 14px; max-width: 760px; font-size: 13px; line-height: 20px; color: var(--text-secondary); }
+  .jv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 16px; }
+  .jv-card { display: flex; flex-direction: column; gap: 8px; color: var(--text-primary); text-decoration: none; font-size: 13px; line-height: 18px; }
+  .jv-card img { width: 100%; height: auto; border-radius: 10px; background: var(--surface-canvas); box-shadow: 0 6px 18px -8px #000000aa; }
+  .jv-card:hover span { text-decoration: underline; }
+  .jv-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: 10px; }
+  .jv-error { padding: 24px; font: 14px/22px var(--font-mono); color: var(--negative); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+/*
+  A small local renderer for the Claude Design .dc.html screens in this folder.
+  It understands the parts these files use: x-dc, helmet, {{holes}}, sc-for, sc-if,
+  dc-import (sibling screens) and x-import (Bukno components from ../system).
+  Open viewer.html for the index, or viewer.html?screen=CodexWorking for one screen.
+*/
+(function () {
+  var h = React.createElement;
+  var cache = {};
+  var helmetDone = {};
+  var HOLE = /\{\{\s*([^}]+?)\s*\}\}/g;
+
+  function DCLogic(props) { this.props = props || {}; this.state = {}; }
+  DCLogic.prototype.setState = function (s) { Object.assign(this.state, typeof s === 'function' ? s(this.state) : s); };
+  DCLogic.prototype.forceUpdate = function () {};
+
+  function lookup(path, scope) {
+    path = path.trim();
+    if (path === 'true') return true;
+    if (path === 'false') return false;
+    if (path === 'null') return null;
+    if (/^-?\d+(\.\d+)?$/.test(path)) return Number(path);
+    var parts = path.split('.'), v = scope;
+    for (var i = 0; i < parts.length; i++) { if (v == null) return undefined; v = v[parts[i]]; }
+    return v;
+  }
+  function attrValue(raw, scope) {
+    var whole = /^\{\{\s*([^}]+?)\s*\}\}$/.exec(raw);
+    if (whole) return lookup(whole[1], scope);
+    return raw.replace(HOLE, function (_, p) { var v = lookup(p, scope); return v == null ? '' : String(v); });
+  }
+  function camel(s) { return s.replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); }); }
+  function styleObj(str) {
+    var o = {};
+    String(str).split(';').forEach(function (decl) {
+      var i = decl.indexOf(':');
+      if (i < 0) return;
+      var k = decl.slice(0, i).trim(), v = decl.slice(i + 1).trim();
+      if (k) o[k.indexOf('--') === 0 ? k : camel(k)] = v;
+    });
+    return o;
+  }
+  var ATTR = { 'class': 'className', 'for': 'htmlFor', 'tabindex': 'tabIndex', 'readonly': 'readOnly', 'colspan': 'colSpan', 'rowspan': 'rowSpan' };
+
+  function loadDef(file) {
+    if (cache[file]) return Promise.resolve(cache[file]);
+    return fetch(file).then(function (r) {
+      if (!r.ok) throw new Error('Could not load ' + file + ' (' + r.status + ')');
+      return r.text();
+    }).then(function (text) {
+      var doc = new DOMParser().parseFromString(text, 'text/html');
+      var root = doc.querySelector('x-dc');
+      var script = doc.querySelector('script[data-dc-script]');
+      var Logic = script ? new Function('DCLogic', script.textContent + '\nreturn Component;')(DCLogic) : DCLogic;
+      var def = { file: file, root: root, Logic: Logic };
+      cache[file] = def;
+      var names = Array.prototype.map.call(root.querySelectorAll('dc-import'), function (e) { return e.getAttribute('name') + '.dc.html'; });
+      return Promise.all(names.map(loadDef)).then(function () { return def; });
+    });
+  }
+
+  function applyHelmet(el, file) {
+    if (helmetDone[file]) return;
+    helmetDone[file] = true;
+    Array.prototype.forEach.call(el.children, function (c) {
+      if (c.localName === 'style' || c.localName === 'link') document.head.appendChild(c.cloneNode(true));
+    });
+  }
+
+  function kids(node, scope, file) {
+    var out = [];
+    Array.prototype.forEach.call(node.childNodes, function (c, i) {
+      var r = conv(c, scope, file, i);
+      if (r == null) return;
+      if (Array.isArray(r)) Array.prototype.push.apply(out, r); else out.push(r);
+    });
+    return out;
+  }
+
+  function conv(n, scope, file, key) {
+    if (n.nodeType === 3) {
+      var t = n.textContent;
+      if (!t.trim()) return t.indexOf('\n') >= 0 ? null : t;
+      return t.replace(HOLE, function (_, p) { var v = lookup(p, scope); return v == null ? '' : String(v); });
+    }
+    if (n.nodeType !== 1) return null;
+    var tag = n.localName;
+    if (tag === 'helmet') { applyHelmet(n, file); return null; }
+    if (tag === 'script') return null;
+    if (tag === 'sc-for') {
+      var items = attrValue(n.getAttribute('list') || '', scope) || [];
+      var as = n.getAttribute('as') || 'item';
+      return items.map(function (item, i) {
+        var s = Object.assign({}, scope, { $index: i }); s[as] = item;
+        return h(React.Fragment, { key: key + '-' + i }, kids(n, s, file));
+      });
+    }
+    if (tag === 'sc-if') {
+      return attrValue(n.getAttribute('value') || '', scope) ? h(React.Fragment, { key: key }, kids(n, scope, file)) : null;
+    }
+    if (tag === 'x-import') {
+      var path = n.getAttribute('component-from-global-scope') || '';
+      var Comp = path.split('.').reduce(function (o, k) { return o && o[k]; }, window);
+      if (!Comp) return h('span', { key: key, className: 'jv-error' }, 'Missing component ' + path);
+      var cprops = { key: key };
+      Array.prototype.forEach.call(n.attributes, function (a) {
+        if (a.name === 'component-from-global-scope' || a.name === 'style') return;
+        cprops[camel(a.name)] = attrValue(a.value, scope);
+      });
+      var ch = kids(n, scope, file);
+      return h.apply(null, [Comp, cprops].concat(ch));
+    }
+    if (tag === 'dc-import') {
+      var dprops = {};
+      Array.prototype.forEach.call(n.attributes, function (a) {
+        if (a.name === 'name' || a.name.indexOf('hint-') === 0) return;
+        dprops[camel(a.name)] = attrValue(a.value, scope);
+      });
+      return h(DCView, { key: key, file: n.getAttribute('name') + '.dc.html', props: dprops });
+    }
+    var props = { key: key };
+    Array.prototype.forEach.call(n.attributes, function (a) {
+      var name = a.name, v = attrValue(a.value, scope);
+      if (name === 'style') props.style = styleObj(v);
+      else if (ATTR[name]) props[ATTR[name]] = v;
+      else if (name.indexOf('aria-') === 0 || name.indexOf('data-') === 0) props[name] = v;
+      else props[name.indexOf('-') > 0 ? camel(name) : name] = v;
+    });
+    var children = kids(n, scope, file);
+    return h(tag, props, children.length ? children : undefined);
+  }
+
+  function DCView(p) {
+    var def = cache[p.file];
+    var inst = new def.Logic(p.props || {});
+    var vals = inst.renderVals ? inst.renderVals() : {};
+    return h(React.Fragment, null, kids(def.root, Object.assign({}, p.props, vals), p.file));
+  }
+
+  function slug(title) { return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
+
+  function Index(p) {
+    var canvas = p.canvas;
+    var rows = {};
+    canvas.order.forEach(function (file) {
+      var b = canvas.boards[file];
+      var title = b.title || file;
+      var group = /^\d+\./.test(title) ? title.split('.')[0] : '5';
+      (rows[group] = rows[group] || []).push({ file: file, title: title });
+    });
+    var notes = canvas.notes || {};
+    return h('main', { className: 'jv-index' },
+      h('h1', null, canvas.title),
+      h('p', null, 'Each card opens the live screen, built from the Bukno design system in ../system. The images are exported snapshots of the same screens.'),
+      Object.keys(rows).sort().map(function (g) {
+        var title = notes['row' + g] ? notes['row' + g].text : 'Screens';
+        var story = notes['story' + g] ? notes['story' + g].text : null;
+        return h('section', { key: g, className: 'jv-row' },
+          h('h2', null, title),
+          story ? h('p', null, story) : null,
+          h('div', { className: 'jv-grid' }, rows[g].map(function (r) {
+            var stem = r.file.replace('.dc.html', '');
+            return h('a', { key: r.file, className: 'jv-card', href: 'viewer.html?screen=' + encodeURIComponent(stem) },
+              h('img', { src: 'screens/' + slug(r.title) + '.png', alt: r.title, loading: 'lazy' }),
+              h('span', null, r.title));
+          })));
+      }));
+  }
+
+  var mount = ReactDOM.createRoot(document.getElementById('root'));
+  var screen = new URLSearchParams(location.search).get('screen') || (location.hash ? location.hash.slice(1) : '');
+  var fail = function (e) { mount.render(h('div', { className: 'jv-error' }, String(e && e.message || e) + '. Serve this folder over http, for example: python3 -m http.server')); };
+  if (screen) {
+    loadDef(screen + '.dc.html').then(function (def) {
+      document.title = screen + ' · Bukno';
+      mount.render(h(DCView, { file: def.file, props: {} }));
+    }).catch(fail);
+  } else {
+    fetch('canvas.json').then(function (r) { return r.json(); }).then(function (canvas) { mount.render(h(Index, { canvas: canvas })); }).catch(fail);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!-- @dsCard group="Delegation and setup" height=330 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>TodoList preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--panel bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '296px' } },
+    h(B.TodoList, { provider: 'codex', agent: 'Codex', task: 'Polish the composer', steps: [
+      { state: 'done', title: 'Read the current layout' },
+      { state: 'done', title: 'Adjusted composer spacing' },
+      { state: 'active', title: 'Checking draft recovery', detail: 'Testing what happens when you switch chats.' },
+      { state: 'pending', title: 'Collect the delegated reviews' }] })));
+</script>
+</body>
+</html>

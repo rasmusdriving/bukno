@@ -1,0 +1,15 @@
+<!-- @dsCard group="Composer" height=420 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Composer preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '720px', display: 'flex', flexDirection: 'column', gap: '20px' } },
+  h(B.Composer, { provider: 'codex', model: 'GPT-6.1 Sol', effort: 'High', level: 4, fast: true, running: true }),
+  h(B.Composer, { provider: 'claude', model: 'Opus 5.5', effort: 'Medium', level: 3, fast: false, running: true, value: 'Also check Shift+Tab from the model picker.', placeholder: 'Follow up with Claude on this task' }),
+  h(B.Composer, { provider: 'codex', model: 'GPT-6.1 Sol', effort: 'Medium', level: 2, fast: false })));
+</script>
+</body>
+</html>

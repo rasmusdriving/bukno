@@ -1,0 +1,15 @@
+<!-- @dsCard group="Conversation" height=280 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Notice preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '600px', display: 'flex', flexDirection: 'column', gap: '10px' } },
+  h(B.Notice, { tone: 'reconnecting', title: 'Reconnecting to Codex', text: 'The connection dropped 8 seconds ago. Nothing will be sent again until Bukno knows what finished.' }),
+  h(B.Notice, { tone: 'unknown', title: 'Outcome unknown', text: 'Codex may have finished this step before the connection dropped.', actions: [{ label: 'Check history', variant: 'primary' }, { label: 'Send again' }] }),
+  h(B.Notice, { tone: 'error', title: 'Claude Code stopped unexpectedly', text: 'The engine exited with code 1. Your draft and this chat are saved.', actions: [{ label: 'Restart Claude Code', icon: 'refresh' }, { label: 'Show log', variant: 'ghost' }] })));
+</script>
+</body>
+</html>

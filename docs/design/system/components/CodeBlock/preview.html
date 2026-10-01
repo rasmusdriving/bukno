@@ -1,0 +1,12 @@
+<!-- @dsCard group="Conversation" height=150 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>CodeBlock preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '560px' } }, h(B.CodeBlock, { lang: 'rust', code: 'let inset = theme.size.inset_bottom; // 12.0\ncomposer.frame(Frame::composer(&theme)).show(ui);' })));
+</script>
+</body>
+</html>

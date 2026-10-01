@@ -1,0 +1,19 @@
+<!-- @dsCard group="Conversation" height=200 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ThinkingOrb preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  var states = ['thinking', 'reading', 'tool', 'waiting'];
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px' } },
+    h('div', { style: { display: 'flex', gap: '36px', alignItems: 'flex-end' } }, states.map(function (s) {
+      return h('span', { key: s, style: { display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '8px' } }, h(B.ThinkingOrb, { provider: 'codex', state: s, size: 32 }), h('span', { className: 'bk-demo__label' }, s));
+    }).concat([h('span', { key: 'c', style: { display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '8px' } }, h(B.ThinkingOrb, { provider: 'claude', state: 'thinking', size: 32 }), h('span', { className: 'bk-demo__label' }, 'claude'))])),
+    h('div', { style: { display: 'flex', gap: '36px', alignItems: 'center' } }, states.slice(0, 3).map(function (s) {
+      return h(B.ThinkingOrb, { key: s, provider: 'claude', state: s, size: 20 });
+    }).concat([h('span', { key: 'l', className: 'bk-demo__label' }, '20px inline')]))));
+</script>
+</body>
+</html>

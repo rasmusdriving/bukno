@@ -1,0 +1,16 @@
+<!-- @dsCard group="Composer" height=230 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>EffortSlider preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '320px', display: 'flex', flexDirection: 'column', gap: '26px', padding: '6px', background: 'var(--surface-popover)', borderRadius: '12px' } },
+    h(B.EffortSlider, { size: 'lg', provider: 'codex', levels: ['Low', 'Medium', 'High', 'XHigh'], value: 'Medium' }),
+    h(B.EffortSlider, { size: 'lg', provider: 'codex', levels: ['Low', 'Medium', 'High', 'XHigh'], value: 'XHigh' }),
+    h(B.EffortSlider, { size: 'lg', provider: 'claude', levels: ['Low', 'Medium', 'High', 'Max'], value: 'High' }),
+    h(B.EffortSlider, { provider: 'claude', levels: ['Low', 'Medium', 'High'], value: 'Medium' })));
+</script>
+</body>
+</html>

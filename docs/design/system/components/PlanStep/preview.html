@@ -1,0 +1,17 @@
+<!-- @dsCard group="Conversation" height=180 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PlanStep preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-plan', style: { width: '480px' } },
+  h(B.PlanStep, { state: 'done', title: 'Read the current layout' }),
+  h(B.PlanStep, { state: 'done', title: 'Adjusted composer spacing' }),
+  h(B.PlanStep, { state: 'active', provider: 'codex', title: 'Checking draft recovery', detail: 'Testing what happens when you switch chats.' }),
+  h(B.PlanStep, { state: 'pending', title: 'Summarise the changes' }),
+  h(B.PlanStep, { state: 'failed', title: 'Run the Windows build', detail: 'No Windows machine connected.' })));
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+<!-- @dsCard group="Conversation" height=150 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>EventLine preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '640px', display: 'flex', flexDirection: 'column', gap: '4px' } },
+    h(B.EventLine, { state: 'done', tag: 'Revision 2', action: 'Open task' }, 'Claude sent a revised result for ', h('strong', null, 'Review keyboard navigation')),
+    h(B.EventLine, { state: 'breathe', provider: 'claude' }, 'You reopened ', h('strong', null, 'Review keyboard navigation'), '. Codex will get the revised result.'),
+    h(B.EventLine, { state: 'waiting', action: 'Open task' }, h('strong', null, 'Review keyboard navigation'), ' needs your approval')));
+</script>
+</body>
+</html>

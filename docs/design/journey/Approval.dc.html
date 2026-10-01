@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Approve a command</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/bukno/tokens.css">
+<link rel="stylesheet" href="ds/bukno/components/bundle.css">
+<script src="ds/bukno/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#252422}
+</style>
+</helmet>
+<div class="bk-root" style="width: 1440px; height: 900px; display: flex; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden">
+<dc-import name="Sidebar" sel="polish" polish="waiting" hint-size="264px,900px"></dc-import>
+<main style="flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface-canvas)">
+<header style="height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 24px">
+<div style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary)">
+<span class="t-small">Bukno</span>
+<span class="t-small" style="color: var(--text-tertiary)">/</span>
+<x-import component-from-global-scope="Bukno.Icon" name="branch" size="14"></x-import>
+<span class="t-small">main</span>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<x-import component-from-global-scope="Bukno.IconButton" icon="more" label="Chat options" size="sm"></x-import>
+<x-import component-from-global-scope="Bukno.IconButton" icon="panel-right" label="Hide the right panel" size="sm" active="{{yes}}"></x-import>
+</div>
+</header>
+<div style="flex: 1; min-height: 0; display: flex; justify-content: center; padding: 20px 40px 0; overflow: hidden">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 14px">
+<h1 class="t-title" style="margin: 0">Polish the composer</h1>
+<x-import component-from-global-scope="Bukno.StateChip" state="waiting" label="Needs approval" time="3m 02s"></x-import>
+</div>
+<x-import component-from-global-scope="Bukno.UserMessage">Improve the composer and ask Claude to review keyboard navigation.</x-import>
+<x-import component-from-global-scope="Bukno.AgentTurn" provider="codex" meta="GPT-6.1 Sol · High">
+<p>I'll tighten the composer spacing first. Claude will review keyboard navigation while a second Codex worker checks the Windows shortcuts.</p>
+<p>The spacing is updated. To check draft recovery I need to run its tests.</p>
+</x-import>
+<x-import component-from-global-scope="Bukno.WorkingIndicator" provider="codex" state="waiting" activity="Waiting for your approval" time="3m 02s"></x-import>
+</div>
+</div>
+<div style="flex: none; display: flex; justify-content: center; padding: 12px 40px 12px">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 10px">
+<x-import component-from-global-scope="Bukno.ApprovalCard" provider="codex" command="cargo test -p bukno-ui --test draft_recovery" meta="in bukno" reason="Runs the draft recovery tests. Codex sandbox, no network access."></x-import>
+<x-import component-from-global-scope="Bukno.Composer" provider="codex" model="GPT-6.1 Sol" effort="High" level="4" fast="{{yes}}" running="{{yes}}" placeholder="Or tell Codex what to do instead"></x-import>
+</div>
+</div>
+</main>
+<aside aria-label="Delegated work and to-do" style="width: 336px; flex: none; display: flex; flex-direction: column; background: var(--surface-panel)">
+<div style="height: 44px; flex: none"></div>
+<div style="display: flex; flex-direction: column; gap: 28px; padding: 20px 12px 0">
+<section aria-label="Delegated work" style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; justify-content: space-between; padding-left: 12px">
+<h2 class="t-heading" style="margin: 0">Delegated work</h2>
+<x-import component-from-global-scope="Bukno.IconButton" icon="x" label="Close the right panel" size="sm"></x-import>
+</div>
+<div class="bk-tasks">
+<x-import component-from-global-scope="Bukno.TaskRow" title="Polish the composer" provider="codex" state="waiting" activity="Wants to run the draft recovery tests." selected="{{yes}}"></x-import>
+<x-import component-from-global-scope="Bukno.TaskRow" title="Review keyboard navigation" provider="claude" state="working" activity="Reading the focus handling code." child="{{yes}}"></x-import>
+<x-import component-from-global-scope="Bukno.TaskRow" title="Check Windows shortcuts" provider="codex" state="working" activity="Verifying Ctrl and Alt behaviour." child="{{yes}}"></x-import>
+<x-import component-from-global-scope="Bukno.TaskRow" title="Review final result" provider="codex" state="queued" child="{{yes}}"></x-import>
+</div>
+</section>
+<div style="padding: 0 12px">
+<x-import component-from-global-scope="Bukno.TodoList" provider="codex" agent="Codex" task="Polish the composer" steps="{{todo}}"></x-import>
+</div>
+</div>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+yes: true,
+todo: [
+{ state: 'done', title: 'Read the current layout' },
+{ state: 'done', title: 'Adjusted composer spacing' },
+{ state: 'active', title: 'Checking draft recovery', detail: 'Needs to run the draft recovery tests.' },
+{ state: 'pending', title: 'Collect the delegated reviews' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+<!-- @dsCard group="Delegation and setup" height=470 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>EngineCard preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '520px', display: 'flex', flexDirection: 'column', gap: '12px' } },
+  h(B.EngineCard, { provider: 'codex', status: 'ready', lines: ['codex-cli 0.158.0 · tested 0.158 to 0.159', 'Signed in with ChatGPT'] }),
+  h(B.EngineCard, { provider: 'claude', name: 'Claude Code', status: 'signin', lines: ['Claude Code 2.1.283'], text: 'Run claude in a terminal and sign in there. Bukno never sees your Claude credentials.', actions: [{ label: 'Check again', icon: 'refresh' }, { label: 'Open terminal', variant: 'ghost', icon: 'terminal' }] }),
+  h(B.EngineCard, { provider: 'claude', name: 'Claude Code', status: 'missing', text: 'Bukno could not find Claude Code on this computer.', actions: [{ label: 'Install guide', iconRight: 'external' }, { label: 'Choose location', variant: 'ghost' }] })));
+</script>
+</body>
+</html>

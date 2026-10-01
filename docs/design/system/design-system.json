@@ -1,0 +1,34 @@
+{
+  "v": 3,
+  "assetGroups": {},
+  "blobs": {},
+  "createdOnFiles": {
+    "at": "2026-09-30T20:06:00Z",
+    "v": 1
+  },
+  "docs": {
+    "readme": "project/README.md",
+    "sections": []
+  },
+  "groups": [],
+  "lastChange": {
+    "at": "2026-09-30T20:06:00Z",
+    "by": "Rasmus Driving",
+    "note": "First draft from the warm-grey mockup, the composer reference and the interface specification.",
+    "via": "Claude Code"
+  },
+  "layout": "files",
+  "libraries": [
+    {
+      "name": "react",
+      "version": "18"
+    },
+    {
+      "name": "react-dom",
+      "version": "18"
+    }
+  ],
+  "namespace": "Bukno",
+  "sections": {},
+  "title": "Bukno"
+}

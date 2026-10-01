@@ -1,0 +1,16 @@
+<!-- @dsCard group="Composer" height=90 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ModelControl preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { background: 'var(--surface-composer)', gap: '8px' } },
+  h(B.ModelControl, { provider: 'codex', model: 'GPT-6.1 Sol', effort: 'High', level: 4, fast: true }),
+  h(B.ModelControl, { provider: 'codex', model: 'GPT-6.1 Sol', effort: 'Low', level: 1, fast: false }),
+  h(B.ModelControl, { provider: 'claude', model: 'Opus 5.5', effort: 'Max', level: 5, fast: true, open: true }),
+  h(B.ModelControl, { provider: 'claude', model: 'Sonnet 5.5', effort: 'Medium', level: 3, fast: false })));
+</script>
+</body>
+</html>

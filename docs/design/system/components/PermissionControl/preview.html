@@ -1,0 +1,12 @@
+<!-- @dsCard group="Composer" height=80 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PermissionControl preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { background: 'var(--surface-composer)' } }, h(B.PermissionControl, { value: 'Ask before changes' }), h(B.PermissionControl, { value: 'Read only', open: true })));
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+<!-- @dsCard group="Conversation" height=170 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>AgentTurn preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '600px' } }, h(B.AgentTurn, { provider: 'codex', meta: 'GPT-6.1 Sol · High' },
+    h(B.ActivityLine, { toggle: true, meta: '9 steps' }, 'Worked for 3m 50s'),
+    h('p', null, 'Draft recovery works when you switch chats. I am now tightening the placeholder copy.'))));
+</script>
+</body>
+</html>

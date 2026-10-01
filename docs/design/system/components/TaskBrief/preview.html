@@ -1,0 +1,12 @@
+<!-- @dsCard group="Conversation" height=150 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>TaskBrief preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '600px' } }, h(B.TaskBrief, { from: 'codex', tag: 'Read only' }, 'Review keyboard navigation in the new composer. Check focus order, Tab and Shift+Tab, and Esc. Report each issue with its file and line.')));
+</script>
+</body>
+</html>

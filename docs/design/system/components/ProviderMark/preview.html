@@ -1,0 +1,15 @@
+<!-- @dsCard group="Identity and state" height=88 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ProviderMark preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { gap: '28px' } },
+  h('span', { className: 'bk-demo__label' }, 'color'), h(B.ProviderMark, { provider: 'codex', size: 20 }), h(B.ProviderMark, { provider: 'claude', size: 20 }),
+  h('span', { className: 'bk-demo__label' }, 'muted'), h(B.ProviderMark, { provider: 'codex', size: 16, tone: 'muted' }), h(B.ProviderMark, { provider: 'claude', size: 16, tone: 'muted' }),
+  h('span', { className: 'bk-demo__label' }, 'row size'), h(B.ProviderMark, { provider: 'codex', size: 14 }), h(B.ProviderMark, { provider: 'claude', size: 14 })));
+</script>
+</body>
+</html>

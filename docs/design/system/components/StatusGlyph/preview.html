@@ -1,0 +1,14 @@
+<!-- @dsCard group="Identity and state" height=120 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>StatusGlyph preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { gap: '22px' } }, ['working','breathe','active','waiting','done','queued','failed','unknown','reconnecting','stopped'].map(function (s) {
+  return h('span', { key: s, style: { display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '8px' } }, h(B.StatusGlyph, { state: s, provider: s === 'breathe' ? 'claude' : 'codex' }), h('span', { className: 'bk-demo__label' }, s));
+})));
+</script>
+</body>
+</html>

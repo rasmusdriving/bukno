@@ -1,0 +1,18 @@
+<!-- @dsCard group="Actions" height=80 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>IconButton preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { background: 'var(--surface-composer)', gap: '10px' } },
+  h(B.IconButton, { icon: 'plus', label: 'Add files or images' }),
+  h(B.IconButton, { icon: 'panel-right', label: 'Show Delegated work', active: true }),
+  h(B.IconButton, { icon: 'stop', label: 'Stop Codex', variant: 'raised' }),
+  h(B.IconButton, { icon: 'arrow-up', label: 'Send to Codex', variant: 'primary' }),
+  h(B.IconButton, { icon: 'arrow-up', label: 'Send to Codex', variant: 'primary', disabled: true }),
+  h(B.IconButton, { icon: 'x', label: 'Close', size: 'sm' })));
+</script>
+</body>
+</html>

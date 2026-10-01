@@ -1,0 +1,59 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bukno</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden; }
+  .cover { position: relative; height: 288px; overflow: hidden; }
+  .art { position: absolute; top: 0; left: 480px; width: 480px; height: 288px; overflow: hidden; }
+  .art svg { display: block; width: 480px; height: 288px; }
+  .codex { fill: var(--codex); }
+  .claude { fill: var(--claude); }
+  .slab { fill: var(--surface-composer); rx: var(--radius-xl); }
+  .blk { rx: var(--radius-lg); }
+  .track { fill: none; stroke: var(--surface-raised); stroke-width: 4px; }
+  .arc { fill: none; stroke: var(--codex); stroke-width: 4px; stroke-linecap: round; }
+  .action { fill: var(--action); }
+  .words { position: absolute; left: var(--space-6); bottom: var(--space-6); max-width: 440px; }
+  .name { margin: 0; font-size: 120px; line-height: 0.9; font-weight: 600; letter-spacing: -0.03em; color: var(--text-primary); }
+  .tag { margin: var(--space-3) 0 0 6px; font-size: 14px; line-height: 20px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 480 288" width="480" height="288">
+<!--
+  blocks      codex 280x144 bled off the top (the largest, Codex blue) · claude 184x88 bled off the right edge · surface-composer 480x112 (size-composer-min tall) bled off the right, the composer itself · one action disc for relief · about 40% of 960x288
+  arrangement two provider blocks side by side above one long composer slab, gutters space-4, the slab space-6 below the blocks, bottom edge space-6 above the frame
+  pattern     the working ring, from "One live thing per region": six frames of its loop across the slab at a space-12 pitch, each arc advanced 60 degrees, surface-raised track under a codex arc
+  scales      block corners radius-lg, slab corners radius-xl, ring radius 12 with a 4px stroke, send disc radius 16 (half its 32px size-control)
+-->
+<rect class="codex blk" x="16" y="-16" width="280" height="144" rx="12"/>
+<rect class="claude blk" x="312" y="40" width="184" height="88" rx="12"/>
+<rect class="slab" x="16" y="152" width="480" height="112" rx="22"/>
+<circle class="track" cx="64" cy="208" r="12"/>
+<circle class="track" cx="112" cy="208" r="12"/>
+<circle class="track" cx="160" cy="208" r="12"/>
+<circle class="track" cx="208" cy="208" r="12"/>
+<circle class="track" cx="256" cy="208" r="12"/>
+<circle class="track" cx="304" cy="208" r="12"/>
+<path class="arc" d="M64 196A12 12 0 0 1 74.39 214"/>
+<path class="arc" d="M122.39 202A12 12 0 0 1 112 220"/>
+<path class="arc" d="M170.39 214A12 12 0 0 1 149.61 214"/>
+<path class="arc" d="M208 220A12 12 0 0 1 197.61 202"/>
+<path class="arc" d="M245.61 214A12 12 0 0 1 256 196"/>
+<path class="arc" d="M293.61 202A12 12 0 0 1 314.39 202"/>
+<circle class="action" cx="424" cy="208" r="16"/>
+</svg>
+</div>
+<div class="words">
+<h1 class="name">Bukno</h1>
+<p class="tag">Quiet chrome for Codex and Claude Code.</p>
+</div>
+</div>
+</body>
+</html>

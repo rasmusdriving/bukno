@@ -1,0 +1,17 @@
+<!-- @dsCard group="Conversation" height=300 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>WorkingIndicator preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '640px', display: 'flex', flexDirection: 'column', gap: '26px' } },
+    h(B.WorkingIndicator, { provider: 'codex', state: 'thinking', activity: 'Thinking', time: '0m 12s', summary: 'Working out how drafts are restored when you switch chats.' }),
+    h(B.WorkingIndicator, { provider: 'codex', state: 'reading', activity: 'Reading the composer module', time: '0m 40s' }),
+    h(B.WorkingIndicator, { provider: 'codex', state: 'tool', activity: 'Testing draft recovery', time: '2m 14s', trail: ['Ran cargo check', 'Edited composer.rs +42 \u22123'] }),
+    h(B.WorkingIndicator, { provider: 'claude', state: 'thinking', activity: 'Thinking', time: '0m 41s', summary: 'Checking whether Shift+Tab inside the open picker reaches the effort slider.' }),
+    h(B.WorkingIndicator, { provider: 'codex', state: 'waiting', activity: 'Waiting for your approval', time: '3m 02s' })));
+</script>
+</body>
+</html>

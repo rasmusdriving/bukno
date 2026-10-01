@@ -1,0 +1,12 @@
+<!-- @dsCard group="Actions" height=72 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Kbd preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { gap: '14px' } }, h(B.Kbd, { keys: ['\u2318', 'N'] }), h(B.Kbd, { keys: ['\u2318', 'K'] }), h(B.Kbd, { keys: ['Ctrl', 'Enter'] }), h(B.Kbd, { keys: 'Esc' })));
+</script>
+</body>
+</html>

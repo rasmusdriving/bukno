@@ -1,0 +1,12 @@
+<!-- @dsCard group="Actions" height=72 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Switch preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-demo', style: { background: 'var(--surface-popover)', gap: '18px' } }, h(B.Switch, { checked: true, label: 'Fast mode', provider: 'codex' }), h(B.Switch, { checked: true, label: 'Fast mode', provider: 'claude' }), h(B.Switch, { checked: false, label: 'Off' }), h(B.Switch, { checked: false, disabled: true, label: 'Unavailable' })));
+</script>
+</body>
+</html>

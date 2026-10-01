@@ -1,0 +1,17 @@
+<!-- @dsCard group="Delegation and setup" height=380 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>TaskRow preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--panel bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-tasks', style: { width: '310px' } },
+  h(B.TaskRow, { title: 'Polish the composer', provider: 'codex', state: 'coordinating', selected: true }),
+  h(B.TaskRow, { title: 'Review keyboard navigation', provider: 'claude', state: 'waiting', activity: 'Wants to run the focus test suite.', child: true }),
+  h(B.TaskRow, { title: 'Check Windows shortcuts', provider: 'codex', state: 'working', activity: 'Verifying Ctrl and Alt behaviour.', child: true }),
+  h(B.TaskRow, { title: 'Review final result', provider: 'codex', state: 'queued', child: true }),
+  h(B.TaskRow, { title: 'Audit contrast', provider: 'claude', state: 'done', activity: 'All text pairs pass 4.5:1.', child: true })));
+</script>
+</body>
+</html>

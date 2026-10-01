@@ -1,0 +1,16 @@
+<!-- @dsCard group="Navigation" height=170 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>UsageMeter preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--sidebar bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-usages', style: { width: '240px', padding: 0 } },
+  h(B.UsageMeter, { provider: 'codex', window: '5h', left: 68 }),
+  h(B.UsageMeter, { provider: 'claude', window: '5h', left: 42, reset: 'Resets 16:20' }),
+  h(B.UsageMeter, { provider: 'codex', window: 'Week', left: 81, state: 'stale', updated: '14 min ago' }),
+  h(B.UsageMeter, { provider: 'claude', window: 'Week', state: 'unavailable' })));
+</script>
+</body>
+</html>

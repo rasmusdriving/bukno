@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Open the task and follow up</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/bukno/tokens.css">
+<link rel="stylesheet" href="ds/bukno/components/bundle.css">
+<script src="ds/bukno/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#252422}
+</style>
+</helmet>
+<div class="bk-root" style="width: 1440px; height: 900px; display: flex; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden">
+<dc-import name="Sidebar" sel="polish" polish="working" hint-size="264px,900px"></dc-import>
+<main style="flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface-canvas)">
+<header style="height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 24px">
+<div style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary)">
+<span class="t-small">Bukno</span>
+<span class="t-small" style="color: var(--text-tertiary)">/</span>
+<x-import component-from-global-scope="Bukno.Icon" name="branch" size="14"></x-import>
+<span class="t-small">main</span>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<x-import component-from-global-scope="Bukno.IconButton" icon="more" label="Task options" size="sm"></x-import>
+<x-import component-from-global-scope="Bukno.IconButton" icon="panel-right" label="Hide the right panel" size="sm" active="{{yes}}"></x-import>
+</div>
+</header>
+<div style="flex: 1; min-height: 0; display: flex; justify-content: center; padding: 12px 40px 0; overflow: hidden">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="margin-left: -8px">
+<x-import component-from-global-scope="Bukno.Breadcrumb" items="{{crumbs}}" back-label="Back to Polish the composer"></x-import>
+</div>
+<div style="display: flex; align-items: center; gap: 14px">
+<h1 class="t-title" style="margin: 0">Review keyboard navigation</h1>
+<x-import component-from-global-scope="Bukno.StateChip" state="working" provider="claude" label="Revising" time="0m 41s" still="{{yes}}"></x-import>
+</div>
+</div>
+<x-import component-from-global-scope="Bukno.TaskBrief" from="codex" tag="Read only">Review keyboard navigation in the new composer. Check focus order, Tab and Shift+Tab, and Esc. Report each issue with its file and line.</x-import>
+<x-import component-from-global-scope="Bukno.AgentTurn" provider="claude" meta="Opus 5.5 · High">
+<x-import component-from-global-scope="Bukno.ActivityLine" toggle="{{yes}}" meta="6 steps">Worked for 1m 12s</x-import>
+<p>Focus order is right in the composer. Two issues:</p>
+<ol style="margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px">
+<li>Esc closes the model picker, but focus jumps to the window instead of back to the model control. <code class="bk-code-inline">model_picker.rs:118</code></li>
+<li>Shift+Tab from Send skips the permission control. <code class="bk-code-inline">composer.rs:204</code></li>
+</ol>
+<x-import component-from-global-scope="Bukno.EventLine" state="done" tag="Revision 1">Result sent to <strong>Codex</strong></x-import>
+</x-import>
+<x-import component-from-global-scope="Bukno.UserMessage" note="Sent to Claude · Codex will get the revised result" note-icon="check">Also check Shift+Tab from inside the open model picker.</x-import>
+<x-import component-from-global-scope="Bukno.WorkingIndicator" provider="claude" state="reading" activity="Reading crates/ui/src/model_picker.rs" time="0m 41s" summary="Checking whether Shift+Tab inside the open picker reaches the effort slider."></x-import>
+</div>
+</div>
+<div style="flex: none; display: flex; justify-content: center; padding: 12px 40px 12px">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 6px">
+<x-import component-from-global-scope="Bukno.ChangeStrip" status="Read-only task · no file changes"></x-import>
+<x-import component-from-global-scope="Bukno.Composer" provider="claude" model="Opus 5.5" effort="High" level="4" fast="{{no}}" running="{{yes}}" placeholder="Follow up with Claude on this task" recipient="Claude on Review keyboard navigation"></x-import>
+</div>
+</div>
+</main>
+<aside aria-label="Delegated work and to-do" style="width: 336px; flex: none; display: flex; flex-direction: column; background: var(--surface-panel)">
+<div style="height: 44px; flex: none"></div>
+<div style="display: flex; flex-direction: column; gap: 28px; padding: 20px 12px 0">
+<section aria-label="Delegated work" style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; justify-content: space-between; padding-left: 12px">
+<h2 class="t-heading" style="margin: 0">Delegated work</h2>
+<x-import component-from-global-scope="Bukno.IconButton" icon="x" label="Close the right panel" size="sm"></x-import>
+</div>
+<div class="bk-tasks">
+<x-import component-from-global-scope="Bukno.TaskRow" title="Polish the composer" provider="codex" state="coordinating"></x-import>
+<x-import component-from-global-scope="Bukno.TaskRow" title="Review keyboard navigation" provider="claude" state="revising" activity="Checking Shift+Tab inside the model picker." child="{{yes}}" selected="{{yes}}"></x-import>
+<x-import component-from-global-scope="Bukno.TaskRow" title="Check Windows shortcuts" provider="codex" state="done" activity="Ctrl and Alt work. Alt+Space opens the window menu." child="{{yes}}"></x-import>
+<x-import component-from-global-scope="Bukno.TaskRow" title="Review final result" provider="codex" state="queued" child="{{yes}}"></x-import>
+</div>
+</section>
+<div style="padding: 0 12px">
+<x-import component-from-global-scope="Bukno.TodoList" provider="claude" agent="Claude" task="Review keyboard navigation" steps="{{todo}}"></x-import>
+</div>
+</div>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+yes: true,
+no: false,
+crumbs: [{ label: 'Polish the composer', provider: 'codex' }, { label: 'Review keyboard navigation' }],
+trail: [{ text: 'Read model_picker.rs', icon: 'eye' }],
+todo: [
+{ state: 'done', title: 'Check Tab order in the composer' },
+{ state: 'done', title: 'Check Esc behaviour' },
+{ state: 'done', title: 'Run the focus order tests' },
+{ state: 'active', title: 'Check Shift+Tab inside the model picker', detail: 'Your follow-up.' },
+{ state: 'pending', title: 'Send the revised result to Codex' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

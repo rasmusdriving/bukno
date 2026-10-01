@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Profile, accounts and usage</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/bukno/tokens.css">
+<link rel="stylesheet" href="ds/bukno/components/bundle.css">
+<script src="ds/bukno/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#252422}
+</style>
+</helmet>
+<div class="bk-root" style="width: 1440px; height: 900px; position: relative; display: flex; background: var(--surface-canvas); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden">
+<dc-import name="Sidebar" sel="polish" polish="idle" usage="stale" profile-open="{{yes}}" hint-size="264px,900px"></dc-import>
+<main style="flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface-canvas)">
+<header style="height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 24px">
+<div style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary)">
+<span class="t-small">Bukno</span>
+<span class="t-small" style="color: var(--text-tertiary)">/</span>
+<x-import component-from-global-scope="Bukno.Icon" name="branch" size="14"></x-import>
+<span class="t-small">main</span>
+</div>
+<div style="display: flex; align-items: center; gap: 4px">
+<x-import component-from-global-scope="Bukno.IconButton" icon="more" label="Chat options" size="sm"></x-import>
+<x-import component-from-global-scope="Bukno.IconButton" icon="panel-right" label="Show Delegated work" size="sm"></x-import>
+</div>
+</header>
+<div style="flex: 1; min-height: 0; display: flex; justify-content: center; padding: 20px 40px 0; overflow: hidden">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 14px">
+<h1 class="t-title" style="margin: 0">Polish the composer</h1>
+<x-import component-from-global-scope="Bukno.StateChip" state="done" time="11m 32s"></x-import>
+</div>
+<x-import component-from-global-scope="Bukno.UserMessage">Improve the composer and ask Claude to review keyboard navigation.</x-import>
+<x-import component-from-global-scope="Bukno.AgentTurn" provider="codex" meta="GPT-6.1 Sol · High">
+<x-import component-from-global-scope="Bukno.ActivityLine" toggle="{{yes}}" meta="24 steps">Worked for 11m 32s</x-import>
+<p>The composer is finished and both reviews are addressed. <code class="bk-code-inline">cargo test -p bukno-ui</code> passes on macOS. Windows was not run.</p>
+</x-import>
+</div>
+</div>
+<div style="flex: none; display: flex; justify-content: center; padding: 12px 40px 12px">
+<div style="width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 6px">
+<x-import component-from-global-scope="Bukno.ChangeStrip" status="Done in 11m 32s" status-state="done" added="128" removed="9"></x-import>
+<x-import component-from-global-scope="Bukno.Composer" provider="codex" model="GPT-6.1 Sol" effort="High" level="4" fast="{{yes}}" placeholder="Ask Codex for a follow-up"></x-import>
+</div>
+</div>
+</main>
+<div style="position: absolute; left: 8px; bottom: 60px">
+<x-import component-from-global-scope="Bukno.Menu" width="300" items="{{items}}"></x-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+yes: true,
+items: [
+{ type: 'section', label: 'Accounts' },
+{ provider: 'codex', label: 'Codex', detail: 'ChatGPT sign-in · codex-cli 0.158.0' },
+{ provider: 'claude', label: 'Claude Code', detail: 'Signed in through Claude Code · 2.1.283' },
+{ type: 'divider' },
+{ type: 'section', label: 'Usage' },
+{ type: 'usage', provider: 'codex', window: '5h', left: 68, state: 'stale', updated: '14 min ago', reset: 'Resets 16:20' },
+{ type: 'usage', provider: 'codex', window: 'Week', left: 81, state: 'stale', updated: '14 min ago', reset: 'Resets Monday 09:00' },
+{ type: 'usage', provider: 'claude', window: '5h', left: 42, reset: 'Resets 15:05' },
+{ type: 'usage', provider: 'claude', window: 'Week', state: 'unavailable' },
+{ type: 'note', icon: 'info', label: 'Bukno only shows usage an engine reports. Missing data is never shown as zero.' },
+{ label: 'Refresh usage', icon: 'refresh', detail: 'Codex was last read 14 min ago' },
+{ type: 'divider' },
+{ label: 'Settings', icon: 'settings', kbd: ['⌘', ','] }
+]
+};
+}
+}
+</script>
+</body>
+</html>

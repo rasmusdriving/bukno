@@ -1,0 +1,20 @@
+<!-- @dsCard group="Navigation" height=300 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ChatRow preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--sidebar bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-group', style: { width: '240px' } },
+  h(B.ProjectRow, { name: 'Bukno', open: true }),
+  h(B.ChatRow, { title: 'Polish the composer', provider: 'codex', state: 'working', selected: true, child: true }),
+  h(B.ChatRow, { title: 'Windows startup', provider: 'claude', state: 'waiting', child: true }),
+  h(B.ChatRow, { title: 'Provider setup', provider: 'codex', state: 'unread', child: true }),
+  h(B.ChatRow, { title: 'Usage refresh rules', provider: 'codex', child: true, focused: true }),
+  h(B.ChatRow, { title: 'Draft recovery', provider: 'claude', state: 'failed', child: true }),
+  h(B.ChatRow, { title: 'Trip notes', provider: 'claude', state: 'unavailable' }),
+  h(B.ChatRow, { title: 'A quick idea', provider: 'claude' })));
+</script>
+</body>
+</html>

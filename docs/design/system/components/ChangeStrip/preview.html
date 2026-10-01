@@ -1,0 +1,14 @@
+<!-- @dsCard group="Composer" height=330 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ChangeStrip preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '720px', display: 'flex', flexDirection: 'column', gap: '24px' } },
+  h(B.ChangeStrip, { status: '2 delegated tasks running', statusState: 'breathe', provider: 'claude', added: 100, removed: 5 }),
+  h(B.ChangeStrip, { status: 'Done in 6m 02s', statusState: 'done', added: 100, removed: 5, expanded: true, files: [{ path: 'crates/ui/src/composer.rs', added: 64, removed: 3 }, { path: 'crates/ui/src/theme.rs', added: 28, removed: 2 }, { path: 'crates/ui/src/model_picker.rs', added: 8, removed: 0 }], note: 'Counts cover this workspace. theme.rs had changes before this run.' })));
+</script>
+</body>
+</html>

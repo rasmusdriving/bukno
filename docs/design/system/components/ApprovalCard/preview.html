@@ -1,0 +1,14 @@
+<!-- @dsCard group="Composer" height=420 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ApprovalCard preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '720px', display: 'flex', flexDirection: 'column', gap: '16px' } },
+  h(B.ApprovalCard, { provider: 'codex', command: 'cargo test -p bukno-ui', meta: 'in bukno', reason: 'Runs the UI tests. Codex sandbox, no network access.' }),
+  h(B.ApprovalCard, { provider: 'claude', kind: 'question', title: 'Claude has a question', reason: 'Should Tab move into the model picker, or skip past it to Send?', options: ['Move into the picker', 'Skip to Send'] })));
+</script>
+</body>
+</html>

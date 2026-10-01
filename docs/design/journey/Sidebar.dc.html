@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sidebar</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/bukno/tokens.css">
+<link rel="stylesheet" href="ds/bukno/components/bundle.css">
+<script src="ds/bukno/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#211f1e}
+</style>
+</helmet>
+<nav aria-label="Chats and projects" style="width: 264px; height: {{boardHeight}}; box-sizing: border-box; display: flex; flex-direction: column; padding: 0 8px 12px; background: var(--surface-sidebar); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden">
+<div style="height: 44px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 2px 0 10px">
+<sc-if value="{{isMac}}" hint-placeholder-val="{{true}}">
+<div aria-hidden="true" style="display: flex; gap: 8px">
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57"></span>
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #febc2e"></span>
+<span style="width: 12px; height: 12px; border-radius: 50%; background: #28c840"></span>
+</div>
+</sc-if>
+<sc-if value="{{isWindows}}" hint-placeholder-val="{{false}}">
+<span style="font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.01em">bukno</span>
+</sc-if>
+<x-import component-from-global-scope="Bukno.IconButton" icon="sidebar" label="Hide sidebar" size="sm"></x-import>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px; padding-top: 4px">
+<button type="button" class="{{newChatClass}}" aria-current="{{newChatCurrent}}">
+<span class="bk-row__lead"><x-import component-from-global-scope="Bukno.Icon" name="compose"></x-import></span>
+<span class="bk-row__title">New chat</span>
+<span class="bk-row__slot"><x-import component-from-global-scope="Bukno.Kbd" keys="{{newKeys}}"></x-import></span>
+</button>
+<button type="button" class="bk-row">
+<span class="bk-row__lead"><x-import component-from-global-scope="Bukno.Icon" name="search"></x-import></span>
+<span class="bk-row__title">Search</span>
+<span class="bk-row__slot"><x-import component-from-global-scope="Bukno.Kbd" keys="{{searchKeys}}"></x-import></span>
+</button>
+</div>
+<div style="height: 16px; flex: none"></div>
+<x-import component-from-global-scope="Bukno.SectionLabel" action="plus" action-label="Add project">Projects</x-import>
+<div class="bk-group">
+<x-import component-from-global-scope="Bukno.ProjectRow" name="Bukno" open="{{yes}}"></x-import>
+<sc-for list="{{rows}}" as="row" hint-placeholder-count="3">
+<x-import component-from-global-scope="Bukno.ChatRow" title="{{row.title}}" provider="{{row.provider}}" state="{{row.state}}" selected="{{row.selected}}" child="{{yes}}"></x-import>
+</sc-for>
+<x-import component-from-global-scope="Bukno.ProjectRow" name="Fieldnotes"></x-import>
+<x-import component-from-global-scope="Bukno.ProjectRow" name="Studio"></x-import>
+</div>
+<div style="height: 16px; flex: none"></div>
+<x-import component-from-global-scope="Bukno.SectionLabel">Chats</x-import>
+<div class="bk-group">
+<x-import component-from-global-scope="Bukno.ChatRow" title="A quick idea" provider="claude"></x-import>
+<x-import component-from-global-scope="Bukno.ChatRow" title="Packing list for Lisbon" provider="codex"></x-import>
+</div>
+<div style="flex: 1"></div>
+<div class="bk-usages" style="padding: 0 12px 16px">
+<x-import component-from-global-scope="Bukno.UsageMeter" provider="codex" window="5h" left="68" state="{{codexUsage}}" updated="14 min ago"></x-import>
+<x-import component-from-global-scope="Bukno.UsageMeter" provider="claude" window="5h" left="42" state="{{claudeUsage}}"></x-import>
+</div>
+<x-import component-from-global-scope="Bukno.ProfileRow" name="Rasmus" open="{{profileOpen}}"></x-import>
+</nav>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"sel":{"editor":"enum","options":["polish","windows","new","none"],"default":"polish"},"polish":{"editor":"enum","options":["idle","working","waiting","unread","failed"],"default":"working"},"windows":{"editor":"enum","options":["idle","working","waiting","unread","failed"],"default":"idle"},"platform":{"editor":"enum","options":["mac","windows"],"default":"mac"},"usage":{"editor":"enum","options":["fresh","stale"],"default":"fresh"},"profileOpen":{"editor":"boolean","default":false},"boardHeight":{"editor":"int","default":900,"min":600,"max":1200,"unit":"px"},"$preview":{"width":264,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const sel = this.props.sel ?? 'polish';
+const platform = this.props.platform ?? 'mac';
+const mac = platform === 'mac';
+return {
+yes: true,
+isMac: mac,
+isWindows: !mac,
+boardHeight: (this.props.boardHeight ?? 900) + 'px',
+newKeys: mac ? ['⌘', 'N'] : ['Ctrl', 'N'],
+searchKeys: mac ? ['⌘', 'K'] : ['Ctrl', 'K'],
+newChatClass: sel === 'new' ? 'bk-row bk-row--selected' : 'bk-row',
+newChatCurrent: sel === 'new' ? 'page' : 'false',
+rows: [
+{ title: 'Polish the composer', provider: 'codex', state: this.props.polish ?? 'working', selected: sel === 'polish' },
+{ title: 'Windows startup', provider: 'claude', state: this.props.windows ?? 'idle', selected: sel === 'windows' },
+{ title: 'Provider setup', provider: 'codex', state: 'idle', selected: false }
+],
+codexUsage: this.props.usage ?? 'fresh',
+claudeUsage: 'fresh',
+profileOpen: this.props.profileOpen ?? false
+};
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!-- @dsCard group="Delegation and setup" height=380 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Menu preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { display: 'flex', gap: '24px', alignItems: 'flex-start' } },
+  h(B.Menu, { width: 300, items: [
+    { type: 'section', label: 'Permissions' },
+    { label: 'Read only', detail: 'Reads files and runs safe commands.', icon: 'eye', check: false },
+    { label: 'Ask before changes', detail: 'Asks before edits and commands.', icon: 'shield', check: true },
+    { label: 'Edit without asking', detail: 'Edits the workspace freely.', icon: 'edit', check: false },
+    { type: 'divider' },
+    { type: 'note', label: 'Codex runs commands in its sandbox. Claude on Windows uses approvals only.', icon: 'lock' }] }),
+  h(B.Menu, { width: 260, items: [
+    { label: 'Open workspace folder', icon: 'folder', kbd: ['\u2318', 'O'] },
+    { label: 'Rename', icon: 'edit' },
+    { label: 'Move to project', icon: 'folder', tag: 'Later', disabled: true },
+    { type: 'divider' },
+    { label: 'Archive chat', danger: true }] })));
+</script>
+</body>
+</html>

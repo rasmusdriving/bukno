@@ -1,0 +1,16 @@
+<!-- @dsCard group="Conversation" height=140 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ActivityLine preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '520px', display: 'flex', flexDirection: 'column' } },
+  h(B.ActivityLine, { toggle: true, meta: '9 steps' }, 'Worked for 2m 14s'),
+  h(B.ActivityLine, { icon: 'terminal', meta: '12s' }, 'Ran ', h('code', null, 'cargo test -p bukno-ui')),
+  h(B.ActivityLine, { icon: 'edit', meta: '+42 \u22123' }, 'Edited ', h('code', null, 'crates/ui/src/composer.rs')),
+  h(B.ActivityLine, { icon: 'eye', meta: '4 files' }, 'Read the layout module')));
+</script>
+</body>
+</html>

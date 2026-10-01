@@ -1,0 +1,29 @@
+<!-- @dsCard group="Composer" height=520 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ModelPicker preview</title></head>
+<body>
+<div id="root" class="bk-demo"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  var codexDetails = ['Quick, light thinking for simple edits.', 'Balanced for everyday coding.', 'Thinks longer on harder problems.', 'Thinks the longest. Slower, and uses more of your limit.'];
+  var claudeDetails = ['Quick answers with little extended thinking.', 'Balanced for everyday work.', 'Thinks longer before acting.', 'Maximum thinking. Slowest, and uses the most of your limit.'];
+  var groups = [
+    { provider: 'codex', models: [
+      { name: 'GPT-6.1 Sol', detail: 'Default for coding', selected: true, levels: ['Low', 'Medium', 'High', 'XHigh'], effort: 'High', details: codexDetails },
+      { name: 'GPT-6.1 Sol Mini', detail: 'Faster, for lighter tasks', levels: ['Low', 'Medium', 'High'], effort: 'Medium', details: codexDetails.slice(0, 3) } ] },
+    { provider: 'claude', models: [
+      { name: 'Opus 5.5', detail: 'Deep work and review', levels: ['Low', 'Medium', 'High', 'Max'], effort: 'High', details: claudeDetails },
+      { name: 'Sonnet 5.5', detail: 'Everyday tasks', levels: ['Low', 'Medium', 'High'], effort: 'Medium', details: claudeDetails.slice(0, 3), fastAvailable: false } ] }
+  ];
+  var claudeFirst = [
+    { provider: 'codex', models: groups[0].models.map(function (m) { return Object.assign({}, m, { selected: false }); }) },
+    { provider: 'claude', models: [Object.assign({}, groups[1].models[0], { selected: true, effort: 'Max' }), groups[1].models[1]] }
+  ];
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { display: 'flex', gap: '24px', alignItems: 'flex-start', flexWrap: 'wrap' } },
+    h(B.ModelPicker, { groups: groups, fast: true }),
+    h(B.ModelPicker, { groups: groups, view: 'models' }),
+    h(B.ModelPicker, { groups: claudeFirst, fast: false, note: 'Changes apply from the next turn.' })));
+</script>
+</body>
+</html>

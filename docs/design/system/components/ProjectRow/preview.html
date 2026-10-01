@@ -1,0 +1,12 @@
+<!-- @dsCard group="Navigation" height=96 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ProjectRow preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--sidebar bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { className: 'bk-group', style: { width: '240px' } }, h(B.ProjectRow, { name: 'Bukno', open: true }), h(B.ProjectRow, { name: 'Fieldnotes' }), h(B.ProjectRow, { name: 'Studio' })));
+</script>
+</body>
+</html>
