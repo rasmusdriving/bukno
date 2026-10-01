@@ -1,10 +1,12 @@
 //! Native equivalents of the design system's components. Each one only draws
 //! itself; screens decide where it goes.
 
+pub mod build_grid;
 pub mod composer;
 pub mod icons;
 pub mod orb;
 pub mod rows;
+pub mod streak;
 
 use bukno_core::message::Provider;
 use egui::{Align2, Color32, Id, Rect, Response, Sense, Ui, WidgetInfo, WidgetType, vec2};

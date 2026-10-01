@@ -720,3 +720,47 @@ fn reference_screens() {
     }
     let _ = results;
 }
+
+/// Compares the approved orb with the two proposed working treatments:
+/// frames at fixed moments, and how often each asks the window to redraw.
+#[test]
+fn working_treatments() {
+    use bukno_desktop::components::orb::Mark;
+    let mut summary = Vec::new();
+    let mut strip: Vec<image::RgbaImage> = Vec::new();
+    for (mark, name) in [(Mark::Orb, "orb"), (Mark::Grid, "grid"), (Mark::Streak, "streak")] {
+        let mut c = Check::new(&format!("working-{name}"), "short", [1440.0, 900.0], false);
+        c.app().working_mark = mark;
+        c.step(2);
+        c.send(ViewUpdate::RunStateChanged { task: synthetic::TASK, run: STREAM_RUN, state: RunState::Running });
+        c.step(2);
+        let mut delays = Vec::new();
+        // Six moments 0.2 s apart (12 frames at 60 Hz).
+        for moment in 0..6 {
+            c.step(12);
+            delays.push(repaint_delay(&c.harness).as_secs_f64() * 1000.0);
+            let image = c.harness.render().expect("render");
+            let crop = image::imageops::crop_imm(&image, 460, 660, 560, 80).to_image();
+            crop.save(c.dir.join(format!("{name}-{moment}.png"))).unwrap();
+            strip.push(crop);
+        }
+        c.shot(&format!("working-{name}"));
+        c.record("repaint_delays_ms", json!(delays));
+        summary.push(json!({ "mark": name, "repaint_delays_ms": delays }));
+        c.finish(json!({ "status": "pass" }));
+    }
+    // One image: a row of six moments per treatment.
+    let (w, h) = (560, 80);
+    let mut out = image::RgbaImage::new(w * 6, h * 3);
+    for (i, tile) in strip.iter().enumerate() {
+        image::imageops::overlay(&mut out, tile, ((i % 6) as u32 * w).into(), ((i / 6) as u32 * h).into());
+    }
+    let dir = evidence_root().join("working-treatments");
+    std::fs::create_dir_all(&dir).unwrap();
+    out.save(dir.join("orb-grid-streak-moments.png")).unwrap();
+    std::fs::write(
+        dir.join("result.json"),
+        serde_json::to_string_pretty(&json!({ "status": "pass", "treatments": summary })).unwrap(),
+    )
+    .unwrap();
+}

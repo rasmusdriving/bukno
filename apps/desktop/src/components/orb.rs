@@ -26,6 +26,28 @@ pub fn orb_fps() -> f32 {
             .unwrap_or(ORB_FPS)
     })
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// The approved ThinkingOrb.
+    Orb,
+    /// Proposed: the stepped BuildGrid.
+    Grid,
+    /// Proposed: the StreakLabel, with no separate mark.
+    Streak,
+}
+
+impl Mark {
+    /// The orb is the approved design; the proposals are chosen with
+    /// `BUKNO_WORKING_MARK=grid` or `BUKNO_WORKING_MARK=streak`.
+    pub fn from_env() -> Self {
+        match std::env::var("BUKNO_WORKING_MARK").ok().as_deref() {
+            Some("grid") => Self::Grid,
+            Some("streak") => Self::Streak,
+            _ => Self::Orb,
+        }
+    }
+}
+
 const TURN_SECONDS: f32 = 20.0;
 const DOTS: usize = 72;
 
@@ -96,6 +118,7 @@ pub struct Working<'a> {
     pub summary: Option<&'a str>,
     pub state: OrbState,
     pub reduce_motion: bool,
+    pub mark: Mark,
 }
 
 /// The WorkingIndicator row: orb, label, elapsed time and the latest
@@ -106,14 +129,30 @@ pub fn working_indicator(ui: &mut Ui, theme: &Theme, rect: Rect, w: &Working<'_>
     let animate = w.state == OrbState::Thinking && !w.reduce_motion && is_shown(ui);
     let t = if animate { now } else { 0.0 };
     let orb_center = pos2(rect.left() + 16.0, rect.top() + 18.0);
-    paint(&painter, theme, orb_center, 32.0, t, w.accent, w.state);
+    let mark = w.mark;
+    let grid = mark == Mark::Grid;
+    let streak = mark == Mark::Streak;
+    let step_seconds = f64::from(theme.duration.step_working);
+    let step = if animate { (ui.input(|i| i.time) / step_seconds) as u64 } else { 2 };
+    match mark {
+        Mark::Grid => super::build_grid::paint(&painter, theme, orb_center, 32.0, step, w.accent, w.state),
+        Mark::Orb => paint(&painter, theme, orb_center, 32.0, t, w.accent, w.state),
+        Mark::Streak => {}
+    }
 
     let c = &theme.color;
-    let x = rect.left() + 32.0 + theme.space.space_3;
+    let x = if streak { rect.left() } else { rect.left() + 32.0 + theme.space.space_3 };
     let label_color = if w.state == OrbState::Waiting { c.text_secondary } else { c.text_primary };
     let label = painter.layout_job(theme.job(w.label, &theme.text.t_ui_strong, label_color, f32::INFINITY));
     let label_w = label.size().x;
-    painter.galley(pos2(x, rect.top() + 6.0), label, label_color);
+    if streak && animate {
+        let pass = f64::from(theme.duration.loop_streak);
+        let phase = (ui.input(|i| i.time) / pass).fract() as f32;
+        let core = super::streak::core_color(c.text_primary, w.accent);
+        super::streak::paint(&painter, &label, pos2(x, rect.top() + 6.0), phase, c.text_tertiary, core);
+    } else {
+        painter.galley(pos2(x, rect.top() + 6.0), label, label_color);
+    }
     if let Some(elapsed) = w.elapsed {
         let time =
             painter.layout_job(theme.job(format_elapsed(elapsed), &theme.text.t_small, c.text_tertiary, f32::INFINITY));
@@ -128,8 +167,14 @@ pub fn working_indicator(ui: &mut Ui, theme: &Theme, rect: Rect, w: &Working<'_>
     // (about 16 ms), which turned a 50 ms request into roughly 30 fps.
     // Add it back so the cap holds.
     let predicted = Duration::from_secs_f32(ui.input(|i| i.predicted_dt).clamp(0.0, 0.1));
-    if animate {
-        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.0 / orb_fps()) + predicted);
+    if animate && grid {
+        // Wake exactly at the next step boundary; nothing changes in between.
+        let next = (step + 1) as f64 * step_seconds - ui.input(|i| i.time);
+        ui.ctx().request_repaint_after(Duration::from_secs_f64(next.max(0.0)) + predicted);
+    } else if animate {
+        let fps =
+            if streak && std::env::var_os("BUKNO_ORB_FPS").is_none() { super::streak::STREAK_FPS } else { orb_fps() };
+        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.0 / fps) + predicted);
     } else if w.elapsed.is_some() && w.state == OrbState::Thinking {
         // The still variant only needs the clock to tick.
         ui.ctx().request_repaint_after(Duration::from_secs(1) + predicted);

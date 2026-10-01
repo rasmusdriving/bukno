@@ -240,6 +240,7 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                 summary,
                 state,
                 reduce_motion: app.reduce_motion,
+                mark: app.working_mark,
             },
         );
     }

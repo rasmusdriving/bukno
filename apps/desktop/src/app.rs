@@ -64,6 +64,8 @@ pub struct BuknoApp {
     pub sidebar_open: bool,
     pub projects_open: [bool; 3],
     pub reduce_motion: bool,
+    /// Working treatment: the approved orb, or a proposal for comparison.
+    pub working_mark: crate::components::orb::Mark,
     pub notice: Option<String>,
     pub evidence: Evidence,
     window_size: egui::Vec2,
@@ -99,6 +101,7 @@ impl BuknoApp {
             sidebar_open: true,
             projects_open: [true, false, false],
             reduce_motion,
+            working_mark: crate::components::orb::Mark::from_env(),
             notice: None,
             evidence: Evidence::from_env(),
             window_size: egui::Vec2::ZERO,

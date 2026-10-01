@@ -84,6 +84,8 @@ const DURATIONS: &[&str] = &[
     "loop-working",
     "loop-breathe",
     "loop-shimmer",
+    "loop-streak",
+    "step-working",
 ];
 const EASINGS: &[&str] = &["ease-standard", "ease-exit"];
 
