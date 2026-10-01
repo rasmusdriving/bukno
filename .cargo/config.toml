@@ -1,0 +1,6 @@
+# Portable settings only. Machine paths (target-dir, DEVELOPER_DIR) go in
+# .cargo/config.local.toml, which scripts/bootstrap.sh writes and Git ignores.
+include = [{ path = "config.local.toml", optional = true }]
+
+[alias]
+xtask = "run --quiet --package xtask --"
