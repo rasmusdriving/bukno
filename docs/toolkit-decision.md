@@ -6,11 +6,19 @@ Covers the gate in [specification section 23](first-version-specification.md#23-
 
 ## Decision
 
-Keep egui 0.36 with eframe, wgpu and AccessKit for the Mac daily driver. No
-must-have failed, so the GPUI comparison from decision 13 was not started.
-Two items still need a person before the decision is final: what VoiceOver
-actually says, and input with a real input method. The orb's CPU cost is
-above its proposed target and needs a budget decision (below).
+**Provisional:** keep egui 0.36 with eframe, wgpu and AccessKit for the Mac
+daily driver. No must-have failed in the automatic checks, so the GPUI
+comparison from decision 13 was not started. The decision stays provisional
+until these are recorded, as the PR 1 review asked:
+
+- VoiceOver in the packaged app (message boundaries and selected text read aloud).
+- A real input method (dead keys, and Japanese or Chinese composition).
+- The real Reduce motion system setting.
+- The early Windows smoke check: typing, selection, scaling and Narrator.
+
+The AccessKit and injected-event checks below do not close those gates. They
+are pending, not failed. The steps are in
+`e2e/scenarios/pass0-native-checks.md`.
 
 The investigation used well under the two-day time box. The toolkit was not
 patched; the one workaround (accessibility parent registration) uses egui's
