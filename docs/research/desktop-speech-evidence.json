@@ -1,0 +1,116 @@
+{
+  "checked_on": "2026-09-30",
+  "verification": "Read-only static app assets, version commands, tagged public source and official documentation. No authenticated request, audio recording or voice call.",
+  "installed_cli_version": "0.158.0",
+  "desktop": {
+    "path": "/Applications/ChatGPT.app",
+    "version": "26.928.21956",
+    "build": "12404",
+    "bundle_id": "com.openai.codex",
+    "bundled_cli_version": "0.159.2",
+    "asar_sha256": "3bda98f2265ad23677dfe0163d1cc7855beade6bef11d27f830f6663d7658406"
+  },
+  "asset_markers": [
+    {
+      "asset": ".vite/build/main-BbeJ4AAR.js",
+      "sha256": "1ff5a43bde26ea6c1b77dbcf782625c890e35a836d489163c19d5ba9942d68b4",
+      "markers": [
+        {
+          "marker": "getDictationStreamWebsocketUrl(){",
+          "first_utf8_byte_offset": 678784,
+          "occurrences": 1
+        },
+        {
+          "marker": "/dictation/stream?dictation_surface=",
+          "first_utf8_byte_offset": 1099394,
+          "occurrences": 1
+        }
+      ]
+    },
+    {
+      "asset": "webview/assets/app-initial-135a4ef2552c.js",
+      "sha256": "8d0cf4d91cf95805808464d43e06ab3106e03924b4f51020e20f143553e746c3",
+      "markers": [
+        {
+          "marker": "fetch(`/transcribe`",
+          "first_utf8_byte_offset": 4643620,
+          "occurrences": 1
+        },
+        {
+          "marker": "Creating client-owned realtime voice call",
+          "first_utf8_byte_offset": 9569205,
+          "occurrences": 1
+        },
+        {
+          "marker": "gpt-live-1-codex",
+          "first_utf8_byte_offset": 9569049,
+          "occurrences": 2
+        },
+        {
+          "marker": "/wham/realtime/calls?intent=quicksilver&architecture=avas",
+          "first_utf8_byte_offset": 9569706,
+          "occurrences": 1
+        },
+        {
+          "marker": "thread/realtime/start",
+          "first_utf8_byte_offset": 4993106,
+          "occurrences": 5
+        },
+        {
+          "marker": "existingCall",
+          "first_utf8_byte_offset": 4993070,
+          "occurrences": 2
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "status": "observed in tagged public source",
+      "finding": "The default WebSocket voice path requires an API-key-style credential in 0.158.0 and 0.159.2; its error says realtime conversation requires API key auth."
+    },
+    {
+      "status": "observed in tagged public source",
+      "finding": "The WebRTC path creates a call through configured provider authentication; it does not invoke the default WebSocket realtime_api_key helper."
+    },
+    {
+      "status": "observed in local packaged code",
+      "finding": "The desktop contains client-owned call creation, a gpt-live-1-codex default, and existingCall app-server attachment. Account-selected runtime behavior was not traced."
+    },
+    {
+      "status": "observed in local packaged code",
+      "finding": "Dictation has streaming service requests and multipart audio upload to a transcription service outside app-server RPC. The deployed transcription model is not identified."
+    },
+    {
+      "status": "inference",
+      "finding": "Bundling affects engine packaging/version control, while speech access also depends on transport, client integration and authentication. The binary alone does not reproduce the whole desktop speech client."
+    }
+  ],
+  "unverified": [
+    "Authenticated WebRTC with an existing Codex ChatGPT login in Bukno",
+    "Eligibility of a specific account/model",
+    "Safe draft-only transcription through app-server",
+    "Desktop dictation deployed model",
+    "Windows speech integration",
+    "Byte-for-byte equivalence of bundled binary and tagged public release"
+  ],
+  "public_sources": [
+    {
+      "snapshot": "rust-v0.158.0-realtime_conversation.rs",
+      "sha256": "1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280"
+    },
+    {
+      "snapshot": "rust-v0.159.2-realtime_conversation.rs",
+      "sha256": "1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280"
+    },
+    {
+      "snapshot": "codex-0.159.2/codex-rs/core/src/client.rs",
+      "sha256": "605ced35cd853fcc4e23f6edd724c96f96f74c736a45e6ea95bf5300f3ab814c"
+    },
+    {
+      "snapshot": "codex-0.159.2/codex-rs/codex-api/src/endpoint/realtime_call.rs",
+      "sha256": "b08ffff66ba728d5275e52d5ac04b976a49b5eb1eb8efad9dd65ccafc49271b3"
+    }
+  ],
+  "official_limitations": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations"
+}

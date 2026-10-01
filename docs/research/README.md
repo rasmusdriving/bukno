@@ -9,3 +9,22 @@ The snapshot includes downloaded documentation, pinned public source extracts, G
 The raw snapshot is archival research, not vendored application code. Before reusing third-party code, preserve its applicable license and attribution. Documentation and service eligibility may change; verify them again during implementation.
 
 No authenticated inference, voice call, microphone recording, or replacement-app benchmark was performed during this research. No secrets were intentionally captured. Existing desktop memory-audit logs remain in the original Codex task outputs, outside this repository.
+
+## Speech follow-up
+
+The mockup review asked whether using an installed CLI instead of a bundled app-server would unlock voice, and how the desktop app implements dictation. Read-only inspection on 30 September 2026 found:
+
+| Observation | Evidence and implication |
+|---|---|
+| Different engine versions | Installed CLI: 0.158.0. `/Applications/ChatGPT.app` bundles 0.159.2. App version 26.928.21956, build 12404, bundle ID `com.openai.codex`. This is a comparison of this machine's builds, not all distributions. |
+| WebSocket voice requires API-key auth in the inspected public versions | Both tagged versions' `realtime_api_key` helpers reject a missing API-key-style credential. The default transport calls this helper. An existing ChatGPT text login alone is not a complete default-WebSocket voice integration. |
+| App-server has another concrete voice path | `transport: webrtc` creates the call through `ModelClient::create_realtime_call_with_headers`, which uses the configured provider's authentication. `existingCall` can attach to a call created by the client. These are integration candidates, not successful service-access tests. |
+| The desktop does more than launch its bundled engine | Its packaged frontend contains client-owned WebRTC call creation with a `gpt-live-1-codex` model default and an `existingCall` app-server connection. Which path a particular account currently selects was not traced. |
+| Desktop dictation has a separate client | The packaged app contains a streaming dictation service path and a multipart recorded-audio transcription fallback. These are desktop HTTP/WebSocket requests, not a dedicated app-server dictation RPC. The client inspection did not identify the service's actual deployed transcription model. |
+| Third-party ChatGPT plan usage is another route | OpenAI's documented route to `api.openai.com/v1` excludes audio/video input and transcription during its preview. These limits are not caused by bundling the binary. |
+
+Public sources: [0.158.0 realtime implementation](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/core/src/realtime_conversation.rs), [0.159.2 realtime implementation](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core/src/realtime_conversation.rs), [0.159.2 call creation/authentication](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core/src/client.rs), [call endpoint implementation](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/codex-api/src/endpoint/realtime_call.rs), [third-party route limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
+The local static-code findings are recorded in [desktop-speech-evidence.json](desktop-speech-evidence.json), including archive hash, asset names, and reproducible search markers. No proprietary app source is copied into this repository. The public source snapshots are retained in the artifact folder and added to the snapshot manifest. Matching a public version tag to a bundled version is source evidence, not proof that the packaged binary is byte-for-byte identical to a public release.
+
+Conclusion for the plan: keep the installed-engine choice for the first text milestone. Prove the supported WebRTC route with engine-managed ChatGPT login in the later speech milestone; separately prove safe draft-only dictation. Do not infer access from the model name, rebrand a first-party client identity, or silently introduce API billing. A separate dictation backend would require a new scope decision. The exact transcription model behind desktop dictation remains unknown from this inspection.

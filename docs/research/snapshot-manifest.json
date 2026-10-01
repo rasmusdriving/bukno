@@ -13,29 +13,14 @@
       "bytes": 100675
     },
     {
-      "path": "codex/codex-rs/app-server-protocol/src/protocol/v2/realtime.rs",
-      "sha256": "d86584ad3d3285672112ccc997b50579822d402a8d0ac2d058efba4ed976ca0c",
-      "bytes": 18600
+      "path": "codex-0.159.2/codex-rs/codex-api/src/endpoint/realtime_call.rs",
+      "sha256": "b08ffff66ba728d5275e52d5ac04b976a49b5eb1eb8efad9dd65ccafc49271b3",
+      "bytes": 27511
     },
     {
-      "path": "codex/codex-rs/core/src/realtime_conversation.rs",
-      "sha256": "1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280",
-      "bytes": 97496
-    },
-    {
-      "path": "codex/codex-rs/tui/src/app/voice_owner.rs",
-      "sha256": "a6e54094fed7027db26d59b60f956cfd8f4deb17d2ce51c0fa59e2f6f7f741bf",
-      "bytes": 5575
-    },
-    {
-      "path": "codex/codex-rs/tui/src/bottom_pane/voice_strip.rs",
-      "sha256": "d1fe8388ef540c7dd7af353710fc1920dbe2375bdb69321f4b5587fdcc8ce477",
-      "bytes": 7219
-    },
-    {
-      "path": "codex/sdk/typescript/src/exec.ts",
-      "sha256": "cac7c2ef4f834bc1cdca133d3950f229451460d9c495eb017dd931c63eaacc79",
-      "bytes": 14203
+      "path": "codex-0.159.2/codex-rs/core/src/client.rs",
+      "sha256": "605ced35cd853fcc4e23f6edd724c96f96f74c736a45e6ea95bf5300f3ab814c",
+      "bytes": 118699
     },
     {
       "path": "codex-schema/ApplyPatchApprovalParams.json",
@@ -2243,9 +2228,49 @@
       "bytes": 2570878
     },
     {
+      "path": "codex/codex-rs/app-server-protocol/src/protocol/v2/realtime.rs",
+      "sha256": "d86584ad3d3285672112ccc997b50579822d402a8d0ac2d058efba4ed976ca0c",
+      "bytes": 18600
+    },
+    {
+      "path": "codex/codex-rs/core/src/realtime_conversation.rs",
+      "sha256": "1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280",
+      "bytes": 97496
+    },
+    {
+      "path": "codex/codex-rs/tui/src/app/voice_owner.rs",
+      "sha256": "a6e54094fed7027db26d59b60f956cfd8f4deb17d2ce51c0fa59e2f6f7f741bf",
+      "bytes": 5575
+    },
+    {
+      "path": "codex/codex-rs/tui/src/bottom_pane/voice_strip.rs",
+      "sha256": "d1fe8388ef540c7dd7af353710fc1920dbe2375bdb69321f4b5587fdcc8ce477",
+      "bytes": 7219
+    },
+    {
+      "path": "codex/sdk/typescript/src/exec.ts",
+      "sha256": "cac7c2ef4f834bc1cdca133d3950f229451460d9c495eb017dd931c63eaacc79",
+      "bytes": 14203
+    },
+    {
+      "path": "desktop-speech-evidence.json",
+      "sha256": "38879e86b79fc8b9a4c2bfd047c927d3145bbf0014e92efddce5902b1f148dbb",
+      "bytes": 4460
+    },
+    {
       "path": "devday.md",
       "sha256": "8f64b801620af6f2e368b1993b148caf22f23b5890bf6ee23c593d1f578535a9",
       "bytes": 7297
+    },
+    {
+      "path": "rust-v0.158.0-realtime_conversation.rs",
+      "sha256": "1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280",
+      "bytes": 97496
+    },
+    {
+      "path": "rust-v0.159.2-realtime_conversation.rs",
+      "sha256": "1e1d2705f025e442d0935a30cc4654c4a7564b47d61ab899c4f7f1a101b75280",
+      "bytes": 97496
     },
     {
       "path": "sign-in.md",
@@ -2261,6 +2286,11 @@
       "path": "siwc-overview.md",
       "sha256": "7c916a3136973625481fe21673c2f342e97fe5a70153bc71e068d5b11be83ebd",
       "bytes": 7361
+    },
+    {
+      "path": "t3-tree.json",
+      "sha256": "cb3de878b1e0fda63f20cd920961d60fbf3ec9873434410ec007e8a747e17634",
+      "bytes": 7204676
     },
     {
       "path": "t3/LICENSE",
@@ -2296,11 +2326,6 @@
       "path": "t3/docs/user/providers-claude.md",
       "sha256": "e0d181706fb9d26113e91144eae742442389c421fe3cd0322579a607f15d47a3",
       "bytes": 5332
-    },
-    {
-      "path": "t3-tree.json",
-      "sha256": "cb3de878b1e0fda63f20cd920961d60fbf3ec9873434410ec007e8a747e17634",
-      "bytes": 7204676
     }
   ]
 }

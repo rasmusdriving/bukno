@@ -446,11 +446,12 @@
     "claude": "Claude Agent SDK bridge controlling the installed Claude Code CLI",
     "excluded": "Separate Claude voice service and separate transcription backend"
   },
-  "dictation_status": "Realtime transcripts verified in protocol; dedicated dictation RPC not found in installed ClientRequest schema; exact draft-only flow untested",
+  "dictation_status": "Realtime transcripts and a transcription session mode exist; no dedicated dictation RPC found in 0.158.0 ClientRequest schema. The inspected desktop has separate streaming/upload dictation clients. Exact safe app-server draft flow and auth remain untested.",
   "sdk_findings": {
     "codex_docs": "https://learn.chatgpt.com/docs/codex-sdk",
     "typescript_source": "sdk/typescript/src/exec.ts launches codex exec --experimental-json",
     "python_docs": "Python SDK controls app-server over JSON-RPC",
     "recommendation": "Direct Rust app-server client rather than an additional SDK runtime"
-  }
+  },
+  "speech_follow_up": "desktop-speech-evidence.json"
 }
