@@ -64,6 +64,9 @@ pub struct TranscriptView {
     viewport_height: f32,
     last_rect: Rect,
     last_column: Rect,
+    /// Revision of each streaming block as last drawn. A selection made on
+    /// that text is remapped through the Markdown source when it changes.
+    drawn_revisions: HashMap<BlockId, u64>,
     pub stats: FrameStats,
     /// Last text this widget copied, kept for UI checks.
     pub last_copied: Option<String>,
@@ -86,6 +89,7 @@ impl Default for TranscriptView {
             viewport_height: 0.0,
             last_rect: Rect::NOTHING,
             last_column: Rect::NOTHING,
+            drawn_revisions: HashMap::new(),
             stats: FrameStats::default(),
             last_copied: None,
         }
@@ -152,6 +156,17 @@ impl TranscriptView {
         self.last_rect = rect;
         self.last_column = column;
         self.layout.sync(doc, theme, column.width(), ctx.pixels_per_point());
+        // Keep the selection on the same source text when streaming Markdown
+        // re-renders its block (an unfinished `**bold` becoming bold).
+        if let Some(sel) = self.selection.as_mut() {
+            for pos in [&mut sel.anchor, &mut sel.focus] {
+                if let Some(&drawn) = self.drawn_revisions.get(&pos.block) {
+                    pos.offset = doc.remap(pos.block, drawn, pos.offset);
+                }
+            }
+        }
+        self.drawn_revisions.clear();
+        self.drawn_revisions.extend(doc.tracked_revisions());
         if let Some(sel) = self.selection
             && sel.ordered(doc).is_none()
         {

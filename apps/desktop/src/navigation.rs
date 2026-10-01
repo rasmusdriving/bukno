@@ -71,79 +71,102 @@ pub fn sidebar(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
     });
     y += row_h + theme.space.space_6 - 8.0;
 
-    rows::section_label(ui, &theme, Rect::from_min_size(pos2(left, y), vec2(width, 28.0)), "Projects");
-    y += 27.0;
-    let projects = [("Bukno", 0usize), ("Fieldnotes", 1), ("Studio", 2)];
-    for (name, i) in projects {
-        let id = Id::new(("nav-project", i));
-        if rows::project_row(ui, &theme, row_rect(y), id, name, app.projects_open[i]).clicked() {
-            app.projects_open[i] = !app.projects_open[i];
-        }
-        y += row_h + 2.0;
-        if i == 0 && app.projects_open[0] {
-            let working = app.run.is_some() && app.view != View::Chat;
-            let chats: [(&str, Provider, bool); 3] = [
-                (app.scenario.title, Provider::Codex, true),
-                ("Windows startup", Provider::Claude, false),
-                ("Provider setup", Provider::Codex, false),
-            ];
-            for (j, (title, provider, is_scenario)) in chats.into_iter().enumerate() {
-                let selected = is_scenario && app.view == View::Chat;
-                let trailing = if is_scenario && (working || (app.run.is_some() && selected)) {
-                    Trailing::Working(provider)
-                } else {
-                    Trailing::Mark(provider)
-                };
-                let response = rows::row(
-                    ui,
-                    &theme,
-                    row_rect(y),
-                    Row {
-                        id: Id::new(("nav-chat", j)),
-                        title,
-                        lead: None,
-                        trailing,
-                        selected,
-                        child: true,
-                        label: Some(format!("{title}, {} chat", crate::components::provider_name(provider))),
-                    },
-                );
-                if response.clicked() {
-                    app.view = if is_scenario { View::Chat } else { View::NewChat };
-                }
-                y += row_h + 2.0;
-            }
-        }
-    }
-    y += theme.space.space_6 - 10.0;
-    rows::section_label(ui, &theme, Rect::from_min_size(pos2(left, y), vec2(width, 28.0)), "Chats");
-    y += 27.0;
-    for (j, (title, provider)) in
-        [("A quick idea", Provider::Claude), ("Packing list for Lisbon", Provider::Codex)].into_iter().enumerate()
-    {
-        let response = rows::row(
-            ui,
-            &theme,
-            row_rect(y),
-            Row {
-                id: Id::new(("nav-loose-chat", j)),
-                title,
-                lead: None,
-                trailing: Trailing::Mark(provider),
-                selected: false,
-                child: false,
-                label: Some(format!("{title}, {} chat", crate::components::provider_name(provider))),
-            },
-        );
-        if response.clicked() {
-            app.view = View::NewChat;
-        }
-        y += row_h + 2.0;
-    }
-
-    // Usage and profile, pinned to the bottom.
+    // Usage and profile are pinned to the bottom; the lists scroll in the
+    // space above them, so short windows never overlap rows and footer.
     let bottom = rect.bottom() - theme.size.size_inset_bottom;
     let profile = Rect::from_min_max(pos2(left, bottom - 40.0), pos2(rect.right() - inset, bottom));
+    let meters_top = profile.top() - 7.0 - 2.0 * 35.0;
+    let list = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), (meters_top - 8.0).max(y)));
+    app.sidebar_list = Some(list);
+    let mut list_ui = ui.new_child(egui::UiBuilder::new().max_rect(list));
+    list_ui.set_clip_rect(list);
+    egui::ScrollArea::vertical().id_salt("nav-list").auto_shrink([false, false]).show(&mut list_ui, |ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        // Reserve the next slot of the list and return it, aligned to the rows.
+        let next = |ui: &mut Ui, height: f32| {
+            let (slot, _) = ui.allocate_exact_size(vec2(list.width(), height), egui::Sense::hover());
+            Rect::from_min_size(pos2(left, slot.top()), vec2(width, height))
+        };
+        let label = next(ui, 27.0);
+        rows::section_label(ui, &theme, Rect::from_min_size(label.min, vec2(width, 28.0)), "Projects");
+        let projects = [("Bukno", 0usize), ("Fieldnotes", 1), ("Studio", 2)];
+        for (name, i) in projects {
+            let id = Id::new(("nav-project", i));
+            let row = next(ui, row_h + 2.0);
+            if rows::project_row(
+                ui,
+                &theme,
+                Rect::from_min_size(row.min, vec2(width, row_h)),
+                id,
+                name,
+                app.projects_open[i],
+            )
+            .clicked()
+            {
+                app.projects_open[i] = !app.projects_open[i];
+            }
+            if i == 0 && app.projects_open[0] {
+                let working = app.run.is_some() && app.view != View::Chat;
+                let chats: [(&str, Provider, bool); 3] = [
+                    (app.scenario.title, Provider::Codex, true),
+                    ("Windows startup", Provider::Claude, false),
+                    ("Provider setup", Provider::Codex, false),
+                ];
+                for (j, (title, provider, is_scenario)) in chats.into_iter().enumerate() {
+                    let selected = is_scenario && app.view == View::Chat;
+                    let trailing = if is_scenario && (working || (app.run.is_some() && selected)) {
+                        Trailing::Working(provider)
+                    } else {
+                        Trailing::Mark(provider)
+                    };
+                    let row = next(ui, row_h + 2.0);
+                    let response = rows::row(
+                        ui,
+                        &theme,
+                        Rect::from_min_size(row.min, vec2(width, row_h)),
+                        Row {
+                            id: Id::new(("nav-chat", j)),
+                            title,
+                            lead: None,
+                            trailing,
+                            selected,
+                            child: true,
+                            label: Some(format!("{title}, {} chat", crate::components::provider_name(provider))),
+                        },
+                    );
+                    if response.clicked() {
+                        app.view = if is_scenario { View::Chat } else { View::NewChat };
+                    }
+                }
+            }
+        }
+        next(ui, theme.space.space_6 - 10.0);
+        let label = next(ui, 27.0);
+        rows::section_label(ui, &theme, Rect::from_min_size(label.min, vec2(width, 28.0)), "Chats");
+        for (j, (title, provider)) in
+            [("A quick idea", Provider::Claude), ("Packing list for Lisbon", Provider::Codex)].into_iter().enumerate()
+        {
+            let row = next(ui, row_h + 2.0);
+            let response = rows::row(
+                ui,
+                &theme,
+                Rect::from_min_size(row.min, vec2(width, row_h)),
+                Row {
+                    id: Id::new(("nav-loose-chat", j)),
+                    title,
+                    lead: None,
+                    trailing: Trailing::Mark(provider),
+                    selected: false,
+                    child: false,
+                    label: Some(format!("{title}, {} chat", crate::components::provider_name(provider))),
+                },
+            );
+            if response.clicked() {
+                app.view = View::NewChat;
+            }
+        }
+    });
+
     let meters_left = rect.left() + 20.0;
     let meters_w = rect.width() - 40.0;
     for (k, provider) in [Provider::Codex, Provider::Claude].into_iter().enumerate() {

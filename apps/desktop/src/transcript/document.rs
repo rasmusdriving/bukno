@@ -4,8 +4,9 @@
 //! Completed messages are parsed once. Only the item that is still streaming
 //! is parsed again when it changes, and only its blocks get new revisions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
+use std::sync::Arc;
 
 use bukno_core::ids::ItemId;
 use bukno_core::message::{ItemKind, Provider, TranscriptItem};
@@ -82,7 +83,19 @@ pub struct Document {
     by_item: HashMap<ItemId, usize>,
     /// Increases whenever any block changes; the layout uses it to notice work.
     pub revision: u64,
+    /// Recent source maps of blocks in messages that are still streaming,
+    /// by block revision. Used to keep a selection on the same source text
+    /// when finishing Markdown changes the rendered text (`**bold` becoming
+    /// `bold`). Completed history keeps none.
+    source_maps: HashMap<BlockId, VecDeque<(u64, SourceMap)>>,
 }
+
+/// Byte offset in the message source of each plain character, plus one end position.
+type SourceMap = Arc<[u32]>;
+
+/// Source-map revisions kept per streaming block. Several revisions can
+/// arrive between two frames; the view remaps at least once a frame.
+const MAP_HISTORY: usize = 32;
 
 impl Document {
     pub fn index_of(&self, id: BlockId) -> Option<usize> {
@@ -99,6 +112,7 @@ impl Document {
         self.blocks.clear();
         self.by_block.clear();
         self.by_item.clear();
+        self.source_maps.clear();
         for item in items {
             self.append(item);
         }
@@ -117,6 +131,7 @@ impl Document {
             return;
         }
         let parsed = parse(item);
+        let keep_maps = !self.messages[index].completed || !item.completed;
         let message = &mut self.messages[index];
         message.source = item.text.clone();
         message.meta = item.meta.clone();
@@ -129,7 +144,7 @@ impl Document {
         let new_blocks: Vec<Block> = parsed
             .into_iter()
             .enumerate()
-            .map(|(ordinal, (kind, text, spans))| {
+            .map(|(ordinal, (kind, text, spans, map))| {
                 let id = BlockId { item: item.id, ordinal: ordinal as u32 };
                 // Keep the old revision when nothing changed, so cached layout survives.
                 let old = (ordinal < old_count).then(|| &self.blocks[first + ordinal]);
@@ -138,6 +153,15 @@ impl Document {
                     Some(old) => old.revision + 1,
                     None => 1,
                 };
+                if keep_maps {
+                    let history = self.source_maps.entry(id).or_default();
+                    if history.back().is_none_or(|(r, _)| *r != revision) {
+                        history.push_back((revision, map.into()));
+                        if history.len() > MAP_HISTORY {
+                            history.pop_front();
+                        }
+                    }
+                }
                 Block { id, revision, chars: text.chars().count(), kind, text, spans, message: index }
             })
             .collect();
@@ -159,8 +183,11 @@ impl Document {
         let first = self.blocks.len();
         let parsed = parse(item);
         let count = parsed.len();
-        for (ordinal, (kind, text, spans)) in parsed.into_iter().enumerate() {
+        for (ordinal, (kind, text, spans, map)) in parsed.into_iter().enumerate() {
             let id = BlockId { item: item.id, ordinal: ordinal as u32 };
+            if !item.completed {
+                self.source_maps.entry(id).or_default().push_back((1, map.into()));
+            }
             self.by_block.insert(id, self.blocks.len());
             self.blocks.push(Block { id, revision: 1, chars: text.chars().count(), kind, text, spans, message: index });
         }
@@ -178,6 +205,35 @@ impl Document {
             revision: item.revision,
             completed: item.completed,
         });
+    }
+
+    /// Current revisions of every block that keeps source maps.
+    pub fn tracked_revisions(&self) -> impl Iterator<Item = (BlockId, u64)> + '_ {
+        self.source_maps.keys().filter_map(|id| Some((*id, self.blocks[self.index_of(*id)?].revision)))
+    }
+
+    /// True when the block keeps source maps (its message is streaming or
+    /// streamed in this session).
+    pub fn tracks_source(&self, id: BlockId) -> bool {
+        self.source_maps.contains_key(&id)
+    }
+
+    /// Move a character offset taken at block revision `from` to the same
+    /// source position in the block's current text. Offsets that cannot be
+    /// mapped are clamped.
+    pub fn remap(&self, id: BlockId, from: u64, offset: usize) -> usize {
+        let Some(index) = self.index_of(id) else { return offset };
+        let block = &self.blocks[index];
+        if from == block.revision {
+            return offset.min(block.chars);
+        }
+        let Some(history) = self.source_maps.get(&id) else { return offset.min(block.chars) };
+        let find = |rev: u64| history.iter().rev().find(|(r, _)| *r == rev).map(|(_, m)| m.clone());
+        let (Some(old), Some(new)) = (find(from), find(block.revision)) else {
+            return offset.min(block.chars);
+        };
+        let source = old[offset.min(old.len() - 1)];
+        new.partition_point(|&s| s < source).min(block.chars)
     }
 
     fn reindex_from(&mut self, from: usize) {
@@ -214,13 +270,86 @@ pub fn char_slice(text: &str, from: usize, to: usize) -> &str {
     &text[start..end.max(start)]
 }
 
-type Parsed = (BlockKind, String, Vec<Span>);
+/// One parsed block: kind, plain text, inline spans, and for every plain
+/// character (plus one end position) its byte offset in the message source.
+type Parsed = (BlockKind, String, Vec<Span>, Vec<u32>);
 
 fn parse(item: &TranscriptItem) -> Vec<Parsed> {
     match item.kind {
         // The user's own text is shown as typed, not interpreted as Markdown.
-        ItemKind::UserMessage => vec![(BlockKind::Paragraph, item.text.clone(), Vec::new())],
+        ItemKind::UserMessage => {
+            let mut map: Vec<u32> = item.text.char_indices().map(|(b, _)| b as u32).collect();
+            map.push(item.text.len() as u32);
+            vec![(BlockKind::Paragraph, item.text.clone(), Vec::new(), map)]
+        }
         ItemKind::AgentMessage { .. } => parse_markdown(&item.text),
+    }
+}
+
+/// Collects one block's text together with its source map.
+#[derive(Default)]
+struct BlockBuilder {
+    kind: Option<BlockKind>,
+    text: String,
+    spans: Vec<Span>,
+    map: Vec<u32>,
+    /// Source position just after the last text taken.
+    end: u32,
+}
+
+impl BlockBuilder {
+    fn begin(&mut self, kind: BlockKind) {
+        if self.kind.is_none() {
+            self.kind = Some(kind);
+        }
+    }
+
+    /// Append rendered text that came from `range` of the source. When the
+    /// rendered text matches the source exactly each character maps to its
+    /// own position; otherwise (escapes, entities) all map to the start.
+    fn push(&mut self, rendered: &str, source: &str, range: Range<usize>) {
+        self.begin(BlockKind::Paragraph);
+        let exact = source.get(range.clone()) == Some(rendered);
+        let base = source.get(range.clone()).and_then(|s| s.find(rendered)).filter(|_| !exact).map(|i| range.start + i);
+        for (b, ch) in rendered.char_indices() {
+            self.text.push(ch);
+            let at = if exact {
+                range.start + b
+            } else if let Some(base) = base {
+                base + b
+            } else {
+                range.start
+            };
+            self.map.push(at as u32);
+        }
+        self.end = self.end.max(range.end as u32);
+    }
+
+    /// Text Bukno adds itself, such as a table cell separator.
+    fn push_synthetic(&mut self, rendered: &str) {
+        self.begin(BlockKind::Paragraph);
+        for ch in rendered.chars() {
+            self.text.push(ch);
+            self.map.push(self.end);
+        }
+    }
+
+    fn flush(&mut self, out: &mut Vec<Parsed>) {
+        if let Some(kind) = self.kind.take() {
+            let is_code = matches!(kind, BlockKind::Code { .. });
+            if is_code && self.text.ends_with('\n') {
+                self.text.pop();
+                self.map.pop();
+            }
+            if !self.text.is_empty() || is_code {
+                let mut map = std::mem::take(&mut self.map);
+                map.push(self.end);
+                out.push((kind, std::mem::take(&mut self.text), std::mem::take(&mut self.spans), map));
+            }
+        }
+        self.text.clear();
+        self.spans.clear();
+        self.map.clear();
     }
 }
 
@@ -228,65 +357,46 @@ fn parse(item: &TranscriptItem) -> Vec<Parsed> {
 /// images show their alt text and are never fetched.
 fn parse_markdown(source: &str) -> Vec<Parsed> {
     let mut out: Vec<Parsed> = Vec::new();
-    let mut text = String::new();
-    let mut spans = Vec::new();
+    let mut b = BlockBuilder::default();
     let mut open: Vec<(SpanStyle, usize)> = Vec::new();
-    let mut kind: Option<BlockKind> = None;
     // Stack of lists: the next number for ordered lists.
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut in_cell = false;
 
-    let flush = |out: &mut Vec<Parsed>, kind: &mut Option<BlockKind>, text: &mut String, spans: &mut Vec<Span>| {
-        if let Some(k) = kind.take() {
-            let is_code = matches!(k, BlockKind::Code { .. });
-            if is_code && text.ends_with('\n') {
-                text.pop();
-            }
-            if !text.is_empty() || is_code {
-                out.push((k, std::mem::take(text), std::mem::take(spans)));
-            }
-        }
-        text.clear();
-        spans.clear();
-    };
-
-    for event in Parser::new_ext(source, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH) {
+    let parser = Parser::new_ext(source, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH);
+    for (event, range) in parser.into_offset_iter() {
         match event {
-            Event::Start(Tag::Paragraph) => {
-                if kind.is_none() {
-                    kind = Some(BlockKind::Paragraph);
-                }
-            }
+            Event::Start(Tag::Paragraph) => b.begin(BlockKind::Paragraph),
             Event::End(TagEnd::Paragraph) => {
                 // A paragraph inside a list item stays part of that item.
-                if !matches!(kind, Some(BlockKind::ListItem { .. })) {
-                    flush(&mut out, &mut kind, &mut text, &mut spans);
+                if !matches!(b.kind, Some(BlockKind::ListItem { .. })) {
+                    b.flush(&mut out);
                 }
             }
             Event::Start(Tag::Heading { level, .. }) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
-                kind = Some(BlockKind::Heading(heading_level(level)));
+                b.flush(&mut out);
+                b.kind = Some(BlockKind::Heading(heading_level(level)));
             }
-            Event::End(TagEnd::Heading(_)) => flush(&mut out, &mut kind, &mut text, &mut spans),
+            Event::End(TagEnd::Heading(_)) => b.flush(&mut out),
             Event::Start(Tag::CodeBlock(code)) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
+                b.flush(&mut out);
                 let lang = match code {
                     CodeBlockKind::Fenced(lang) => lang.split_whitespace().next().unwrap_or("").to_owned(),
                     CodeBlockKind::Indented => String::new(),
                 };
-                kind = Some(BlockKind::Code { lang });
+                b.kind = Some(BlockKind::Code { lang });
             }
-            Event::End(TagEnd::CodeBlock) => flush(&mut out, &mut kind, &mut text, &mut spans),
+            Event::End(TagEnd::CodeBlock) => b.flush(&mut out),
             Event::Start(Tag::List(start)) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
+                b.flush(&mut out);
                 lists.push(start);
             }
             Event::End(TagEnd::List(_)) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
+                b.flush(&mut out);
                 lists.pop();
             }
             Event::Start(Tag::Item) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
+                b.flush(&mut out);
                 let depth = lists.len().saturating_sub(1) as u8;
                 let number = lists.last_mut().and_then(|n| {
                     let current = *n;
@@ -295,54 +405,44 @@ fn parse_markdown(source: &str) -> Vec<Parsed> {
                     }
                     current
                 });
-                kind = Some(BlockKind::ListItem { number, depth });
+                b.kind = Some(BlockKind::ListItem { number, depth });
             }
-            Event::End(TagEnd::Item) => flush(&mut out, &mut kind, &mut text, &mut spans),
+            Event::End(TagEnd::Item) => b.flush(&mut out),
             Event::Start(Tag::TableRow | Tag::TableHead) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
-                kind = Some(BlockKind::Paragraph);
+                b.flush(&mut out);
+                b.kind = Some(BlockKind::Paragraph);
                 in_cell = false;
             }
-            Event::End(TagEnd::TableRow | TagEnd::TableHead) => {
-                flush(&mut out, &mut kind, &mut text, &mut spans);
-            }
+            Event::End(TagEnd::TableRow | TagEnd::TableHead) => b.flush(&mut out),
             Event::Start(Tag::TableCell) => {
                 if in_cell {
-                    text.push_str(" | ");
+                    b.push_synthetic(" | ");
                 }
                 in_cell = true;
             }
-            Event::Start(Tag::Strong) => open.push((SpanStyle::Strong, text.len())),
-            Event::Start(Tag::Emphasis) => open.push((SpanStyle::Emphasis, text.len())),
-            Event::Start(Tag::Link { .. }) => open.push((SpanStyle::Link, text.len())),
+            Event::Start(Tag::Strong) => open.push((SpanStyle::Strong, b.text.len())),
+            Event::Start(Tag::Emphasis) => open.push((SpanStyle::Emphasis, b.text.len())),
+            Event::Start(Tag::Link { .. }) => open.push((SpanStyle::Link, b.text.len())),
             Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Link) => {
                 if let Some((style, start)) = open.pop() {
-                    spans.push(Span { range: start..text.len(), style });
+                    b.spans.push(Span { range: start..b.text.len(), style });
                 }
             }
             Event::Code(code) => {
-                if kind.is_none() {
-                    kind = Some(BlockKind::Paragraph);
-                }
-                let start = text.len();
-                text.push_str(&code);
-                spans.push(Span { range: start..text.len(), style: SpanStyle::Code });
+                let start = b.text.len();
+                b.push(&code, source, range);
+                b.spans.push(Span { range: start..b.text.len(), style: SpanStyle::Code });
             }
-            Event::Text(t) | Event::Html(t) | Event::InlineHtml(t) => {
-                if kind.is_none() {
-                    kind = Some(BlockKind::Paragraph);
-                }
-                text.push_str(&t);
-            }
-            Event::SoftBreak => text.push(' '),
-            Event::HardBreak => text.push('\n'),
+            Event::Text(t) | Event::Html(t) | Event::InlineHtml(t) => b.push(&t, source, range),
+            Event::SoftBreak => b.push(" ", source, range.start..range.start),
+            Event::HardBreak => b.push("\n", source, range.start..range.start),
             _ => {}
         }
     }
-    flush(&mut out, &mut kind, &mut text, &mut spans);
+    b.flush(&mut out);
     if out.is_empty() {
         // An empty streaming reply still has one block to hold the caret.
-        out.push((BlockKind::Paragraph, String::new(), Vec::new()));
+        out.push((BlockKind::Paragraph, String::new(), Vec::new(), vec![0]));
     }
     out
 }

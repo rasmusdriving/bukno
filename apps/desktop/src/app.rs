@@ -43,6 +43,12 @@ pub enum View {
     NewChat,
 }
 
+/// A message handed to the coordinator and not yet accepted or rejected.
+pub struct PendingSubmit {
+    /// The draft revision that was sent. Only that revision is cleared.
+    pub revision: u64,
+}
+
 pub struct ActiveRun {
     pub run: RunId,
     pub state: RunState,
@@ -60,8 +66,11 @@ pub struct BuknoApp {
     pub transcript: TranscriptView,
     pub composer: ComposerState,
     pub run: Option<ActiveRun>,
+    pub pending_submit: Option<PendingSubmit>,
     pub view: View,
     pub sidebar_open: bool,
+    /// Where the sidebar's scrolling list was drawn last frame (for checks).
+    pub sidebar_list: Option<egui::Rect>,
     pub projects_open: [bool; 3],
     pub reduce_motion: bool,
     /// Working treatment: the approved orb, or a proposal for comparison.
@@ -98,7 +107,9 @@ impl BuknoApp {
             transcript: TranscriptView::default(),
             composer: ComposerState::default(),
             run: None,
+            pending_submit: None,
             sidebar_open: true,
+            sidebar_list: None,
             projects_open: [true, false, false],
             reduce_motion,
             working_mark: crate::components::orb::Mark::from_env(),
@@ -135,6 +146,18 @@ impl BuknoApp {
                     self.doc.load(&items);
                 }
                 UiEvent::View(ViewUpdate::ItemUpserted(item)) if item.task == synthetic::TASK => {
+                    if item.kind == bukno_core::message::ItemKind::UserMessage
+                        && let Some(pending) = self.pending_submit.take()
+                    {
+                        // Accepted. Clear only the revision that was sent; anything
+                        // typed since stays.
+                        if self.composer.revision == pending.revision {
+                            self.composer.text.clear();
+                            self.composer.revision += 1;
+                        }
+                        self.view = View::Chat;
+                        self.transcript.scroll_to_end();
+                    }
                     if matches!(item.kind, bukno_core::message::ItemKind::AgentMessage { .. })
                         && let Some(run) = self.run.as_mut()
                         && item.run == Some(run.run)
@@ -155,29 +178,39 @@ impl BuknoApp {
                 }
                 UiEvent::View(_) => {}
                 UiEvent::Rejected { reason, .. } => {
-                    self.notice = Some(format!("Not sent: {reason:?}"));
+                    // The draft was never cleared, so it is still there to edit.
+                    self.pending_submit = None;
+                    self.notice = Some(rejection_words(&reason));
                 }
             }
         }
     }
 
+    /// Why Send is unavailable, if it is.
+    pub fn send_blocked(&self) -> Option<&'static str> {
+        if self.pending_submit.is_some() {
+            Some("Sending…")
+        } else if self.run.is_some() {
+            // Steering and the next-turn queue land in Pass 1.
+            Some("You can send when this run finishes. Your draft is kept.")
+        } else {
+            None
+        }
+    }
+
     pub fn submit(&mut self) {
         let body = self.composer.text.trim().to_owned();
-        if body.is_empty() {
+        if body.is_empty() || self.send_blocked().is_some() {
             return;
         }
+        self.notice = None;
+        self.pending_submit = Some(PendingSubmit { revision: self.composer.revision });
         self.backend.send(UiCommand::Submit {
             task: synthetic::TASK,
             provider: self.provider(),
             draft_revision: self.composer.revision,
             body,
         });
-        // Pass 0 has no outbox acknowledgement for drafts; the synthetic
-        // coordinator accepts immediately, so the draft clears on send.
-        self.composer.text.clear();
-        self.composer.revision += 1;
-        self.view = View::Chat;
-        self.transcript.scroll_to_end();
     }
 
     pub fn stop(&mut self) {
@@ -242,6 +275,17 @@ impl BuknoApp {
         }
         #[cfg(not(target_os = "macos"))]
         let _ = frame;
+    }
+}
+
+fn rejection_words(reason: &bukno_core::event::RejectReason) -> String {
+    use bukno_core::event::RejectReason as R;
+    match reason {
+        R::EmptyMessage => "Nothing to send.".into(),
+        R::DuplicateMessage => "That message was already sent.".into(),
+        R::RunActive => "Not sent: this chat is still working. Your draft is kept.".into(),
+        R::UnknownRun => "That run is no longer active.".into(),
+        R::NotSaved(why) => format!("Not sent, because it could not be saved first ({why}). Your draft is kept."),
     }
 }
 

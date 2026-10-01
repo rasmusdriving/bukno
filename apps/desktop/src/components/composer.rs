@@ -49,6 +49,9 @@ pub struct ComposerProps<'a> {
     /// 1 to 5 on the provider's effort ramp.
     pub effort_level: u8,
     pub permission: &'a str,
+    /// Why Send is unavailable right now, shown beside the composer. The
+    /// draft is never cleared while this is set.
+    pub send_blocked: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,11 +60,15 @@ pub enum ComposerAction {
     Stop,
 }
 
-pub fn height_for(ui: &Ui, theme: &Theme, state: &ComposerState, width: f32) -> f32 {
+/// The composer's height for its current text, never more than
+/// `max_height` (the text scrolls inside it beyond that).
+pub fn height_for(ui: &Ui, theme: &Theme, state: &ComposerState, width: f32, max_height: f32) -> f32 {
     let wrap = width - PAD_LEFT - PAD_RIGHT - 6.0;
     let galley = ui.fonts_mut(|f| f.layout_job(input_job(theme, &state.text, wrap)));
-    let input = galley.size().y.clamp(INPUT_MIN, INPUT_MAX);
-    (PAD_TOP + input + BAR_GAP + theme.size.size_control + PAD_BOTTOM).max(theme.size.size_composer_min)
+    let chrome = PAD_TOP + BAR_GAP + theme.size.size_control + PAD_BOTTOM;
+    let input_max = (max_height - chrome).clamp(INPUT_MIN, INPUT_MAX);
+    let input = galley.size().y.clamp(INPUT_MIN, input_max);
+    (chrome + input).max(theme.size.size_composer_min)
 }
 
 fn input_job(theme: &Theme, text: &str, wrap: f32) -> LayoutJob {
@@ -86,8 +93,13 @@ pub fn show(
     theme.paint_shadow(ui.painter(), rect, theme.radius.radius_xl, &theme.shadow.shadow_composer);
     ui.painter().rect_filled(rect, theme.radius.radius_xl, c.surface_composer);
 
-    // Enter handling happens before the text field sees the events.
+    // Composition belongs to the focused field. Losing focus ends it, so a
+    // cancellation the input method sends afterwards cannot leave it stuck.
     let focused = ui.memory(|m| m.has_focus(id));
+    if !focused {
+        state.composing = false;
+    }
+    // Enter handling happens before the text field sees the events.
     if focused {
         let mut send = false;
         ui.input_mut(|i| {
@@ -102,6 +114,7 @@ pub fn show(
                     }
                 }
             }
+            // Enter during composition belongs to the input method.
             let composing = state.composing || ime_activity;
             i.events.retain(|event| match event {
                 Event::Key { key: Key::Enter, pressed, modifiers, .. } if !modifiers.shift && !composing => {
@@ -113,9 +126,20 @@ pub fn show(
                 _ => true,
             });
         });
-        if send && !state.text.trim().is_empty() {
+        if send && !state.text.trim().is_empty() && props.send_blocked.is_none() {
             action = Some(ComposerAction::Send);
         }
+    }
+    if let Some(reason) = props.send_blocked
+        && !state.text.trim().is_empty()
+    {
+        ui.painter().text(
+            pos2(rect.left() + PAD_LEFT, rect.top() - 14.0),
+            Align2::LEFT_CENTER,
+            reason,
+            theme.font(&theme.text.t_small),
+            c.text_tertiary,
+        );
     }
 
     let input_rect = Rect::from_min_max(
@@ -173,6 +197,7 @@ pub fn show(
 
     let primary = Rect::from_min_size(pos2(bar.right() - 32.0, bar.top()), vec2(32.0, 32.0));
     let has_text = !state.text.trim().is_empty();
+    let can_send = has_text && props.send_blocked.is_none();
     let model_right = if props.running && !has_text {
         let stop = Rect::from_min_max(pos2(bar.right() - 78.0, bar.top()), bar.right_bottom());
         if stop_button(ui, theme, stop, id.with("stop")).clicked() {
@@ -180,7 +205,7 @@ pub fn show(
         }
         stop.left() - 4.0
     } else {
-        if send_button(ui, theme, primary, id.with("send"), has_text).clicked() && has_text {
+        if send_button(ui, theme, primary, id.with("send"), can_send).clicked() && can_send {
             action = Some(ComposerAction::Send);
         }
         let mut left = primary.left() - 4.0;

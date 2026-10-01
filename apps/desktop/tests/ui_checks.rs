@@ -137,6 +137,28 @@ impl Check {
         }
     }
 
+    /// What the coordinator publishes when it accepts a submitted message.
+    fn accept_user_message(&mut self, body: &str) {
+        self.send(ViewUpdate::ItemUpserted(TranscriptItem {
+            id: ItemId(0x5b5e_0000_0000_0000_0004_0000_0000_0000 + self.stream_words as u128 + body.len() as u128),
+            task: synthetic::TASK,
+            run: None,
+            kind: ItemKind::UserMessage,
+            text: body.trim().to_owned(),
+            meta: None,
+            completed: true,
+            revision: 1,
+        }));
+        self.step(2);
+    }
+
+    fn type_in_composer(&mut self, text: &str) {
+        self.harness.ctx.memory_mut(|m| m.request_focus(composer_id()));
+        self.step(1);
+        self.harness.event(Event::Text(text.into()));
+        self.step(1);
+    }
+
     fn wheel(&mut self, dy: f32) {
         let center = self.app().transcript.viewport().center();
         self.harness.event(Event::PointerMoved(center));
@@ -609,7 +631,9 @@ fn composer_ime_and_swedish_text() {
         Ok(UiCommand::Submit { body, .. }) => assert_eq!(body, text.trim()),
         other => panic!("expected a submit, got {other:?}"),
     }
-    assert!(c.app().composer.text.is_empty());
+    assert_eq!(c.app().composer.text, text, "the draft stays until the coordinator accepts it");
+    c.accept_user_message(&text);
+    assert!(c.app().composer.text.is_empty(), "accepted, so the sent revision is cleared");
     c.finish(json!({ "status": "pass", "sent": text }));
 }
 
@@ -828,4 +852,204 @@ fn streak_frame_rates() {
         serde_json::to_string_pretty(&json!({ "status": "pass", "gifs": results })).unwrap(),
     )
     .unwrap();
+}
+
+// Checks added for the PR 1 review (Codex). Each names its finding.
+//
+// R1 (P1) Pressing Enter while a run is active cleared the draft, although
+//    the coordinator rejected the message as RunActive.
+// R3 (P2) An IME cancellation sent after the composer lost focus left it
+//    "composing", so Enter inserted newlines instead of sending.
+// R4 (P2) Finishing streamed Markdown (`**bold` to bold) kept the old
+//    character offsets, so a selected "bold" became "ld".
+// R5 (P2) At 480 points high the sidebar rows ran under the pinned footer.
+// R6 (P2) A long new-chat draft pushed Send below a short window.
+
+fn submits(c: &Check) -> Vec<String> {
+    c.commands
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            UiCommand::Submit { body, .. } => Some(body),
+            _ => None,
+        })
+        .collect()
+}
+
+/// R1: the draft survives sending during a run, a rejection, and typing
+/// while a send is pending.
+#[test]
+fn review_draft_survives_send_during_run() {
+    let mut c = Check::new("review-draft", "short", [1440.0, 900.0], true);
+    c.step(3);
+    c.send(ViewUpdate::RunStateChanged { task: synthetic::TASK, run: STREAM_RUN, state: RunState::Running });
+    c.step(2);
+    c.type_in_composer("Also check the narrow window");
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    assert!(submits(&c).is_empty(), "nothing is sent while the run is active");
+    assert_eq!(c.app().composer.text, "Also check the narrow window", "the draft is kept, without a newline");
+    assert!(c.app().send_blocked().is_some());
+    c.shot("review-draft-01-blocked-during-run");
+
+    // The run ends; Send works, and the draft stays until accepted.
+    c.send(ViewUpdate::RunStateChanged { task: synthetic::TASK, run: STREAM_RUN, state: RunState::Completed });
+    c.step(2);
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    assert_eq!(submits(&c), vec!["Also check the narrow window".to_owned()]);
+    assert_eq!(c.app().composer.text, "Also check the narrow window");
+
+    // A rejection keeps the draft and explains why.
+    c.events
+        .send(UiEvent::Rejected { task: synthetic::TASK, reason: bukno_core::event::RejectReason::RunActive })
+        .unwrap();
+    c.step(2);
+    assert_eq!(c.app().composer.text, "Also check the narrow window", "a rejected message keeps its draft");
+    assert!(c.app().notice.as_deref().is_some_and(|n| n.contains("draft is kept")));
+
+    // Typing while a send is pending is not cleared by the acceptance.
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    assert_eq!(submits(&c).len(), 1);
+    c.harness.event(Event::Text(" and the sidebar".into()));
+    c.step(2);
+    c.accept_user_message("Also check the narrow window");
+    assert_eq!(c.app().composer.text, "Also check the narrow window and the sidebar", "a newer revision is kept");
+    let kept = c.app().composer.text.clone();
+    c.finish(json!({ "status": "pass", "draft_after_newer_typing": kept }));
+}
+
+/// R3: losing focus ends composition, so a later cancellation cannot block Enter.
+#[test]
+fn review_ime_cancel_after_focus_loss() {
+    let mut c = Check::new("review-ime-cancel", "empty", [1440.0, 900.0], true);
+    c.step(2);
+    c.harness.ctx.memory_mut(|m| m.request_focus(composer_id()));
+    c.step(1);
+    c.harness.event(Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
+    c.step(1);
+    assert!(c.app().composer.composing);
+    // Focus moves to the sidebar, then the input method cancels.
+    c.harness.ctx.memory_mut(|m| m.request_focus(egui::Id::new("nav-new-chat")));
+    c.step(2);
+    c.harness.event(Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+    c.step(1);
+    c.harness.ctx.memory_mut(|m| m.request_focus(composer_id()));
+    c.step(1);
+    assert!(!c.app().composer.composing, "composition ended with the focus loss");
+    c.harness.event(Event::Text("Ready to send".into()));
+    c.step(1);
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    let sent = submits(&c);
+    assert_eq!(sent.len(), 1, "Enter sends again");
+    assert!(sent[0].ends_with("Ready to send") && !sent[0].contains('\n'));
+    c.finish(json!({ "status": "pass", "sent": sent[0] }));
+}
+
+/// R4: selections keep their text while streamed Markdown finishes:
+/// emphasis, inline code and a link.
+#[test]
+fn review_selection_survives_markdown_completion() {
+    let mut c = Check::new("review-markdown-selection", "short", [1440.0, 900.0], true);
+    c.step(2);
+    c.send(ViewUpdate::RunStateChanged { task: synthetic::TASK, run: STREAM_RUN, state: RunState::Running });
+    let reply = |c: &Check, text: &str, revision: u64| {
+        c.send(ViewUpdate::ItemUpserted(TranscriptItem {
+            id: STREAM_ITEM,
+            task: synthetic::TASK,
+            run: Some(STREAM_RUN),
+            kind: ItemKind::AgentMessage { provider: Provider::Codex },
+            text: text.into(),
+            meta: None,
+            completed: false,
+            revision,
+        }));
+    };
+    // Each case: the unfinished source, the word to select (char range in
+    // its rendered text), and the finished source.
+    let cases = [
+        ("prefix **bold", (9, 13), "prefix **bold** after", "bold"),
+        ("use `cod", (5, 8), "use `code` now", "cod"),
+        ("see [docs](htt", (5, 9), "see [docs](https://example.org) then", "docs"),
+    ];
+    let mut observed = Vec::new();
+    for (n, (unfinished, (from, to), finished, word)) in cases.into_iter().enumerate() {
+        let base = n as u64 * 10;
+        reply(&c, unfinished, base + 1);
+        c.step(3);
+        // Select the word with the mouse, as a person would.
+        let block = c.app().doc.blocks.last().unwrap().id;
+        let start = c.screen(TextPos { block, offset: from }).unwrap();
+        let end = c.screen(TextPos { block, offset: to }).unwrap();
+        c.harness.event(Event::PointerMoved(start));
+        c.harness.event(Event::PointerButton {
+            pos: start,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        c.step(1);
+        c.harness.event(Event::PointerMoved(end));
+        c.step(1);
+        c.harness.event(Event::PointerButton {
+            pos: end,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        c.step(1);
+        let before = c.selection().unwrap().text(&c.harness.state().doc);
+        assert_eq!(before, word, "selected the unfinished word");
+        reply(&c, finished, base + 2);
+        c.step(3);
+        let after = c.selection().unwrap().text(&c.harness.state().doc);
+        let copied = c.copy();
+        assert_eq!(after, word, "the selection keeps its text when {unfinished:?} finishes");
+        assert_eq!(copied.as_deref(), Some(word));
+        observed.push(json!({ "unfinished": unfinished, "finished": finished, "selected_before": before, "selected_after": after }));
+    }
+    c.shot("review-markdown-selection");
+    c.finish(json!({ "status": "pass", "cases": observed }));
+}
+
+/// R5 and R6: at the declared minimum height nothing overlaps or leaves the
+/// window, and the sidebar list scrolls above its footer.
+#[test]
+fn review_short_window_layout() {
+    let mut c = Check::new("review-short-window", "short", [1024.0, 480.0], true);
+    c.step(3);
+    let list = c.app().sidebar_list.expect("sidebar shown at 1024 wide");
+    let profile = c.harness.get_by_label("Profile, Synthetic scenario").rect();
+    assert!(list.bottom() <= profile.top() - 70.0, "the list ends above the usage meters: {list:?} vs {profile:?}");
+    c.shot("review-short-window-01-chat");
+    // Scroll the list to its end: the last chat sits inside the list, above the footer.
+    c.harness.event(Event::PointerMoved(list.center()));
+    c.harness.event(Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -400.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    c.step(30);
+    let last = c.harness.get_by_label("Packing list for Lisbon, Codex chat").rect();
+    assert!(
+        last.bottom() <= list.bottom() + 0.5 && last.top() >= list.top() - 0.5,
+        "the last row scrolls fully into the list: {last:?} in {list:?}"
+    );
+    c.shot("review-short-window-02-sidebar-scrolled");
+
+    // A 15-line draft in a new chat keeps Send and the toolbar inside the window.
+    c.key(Modifiers::COMMAND, Key::N);
+    c.step(2);
+    let draft: String = (1..=15).map(|i| format!("Line {i} of a long direction\n")).collect();
+    c.harness.event(Event::Paste(draft));
+    c.step(4);
+    let send = c.harness.get_by_label("Send").rect();
+    let model = c.harness.get_by(|n| n.label().or_else(|| n.value()).is_some_and(|l| l.starts_with("Model "))).rect();
+    assert!(send.bottom() <= 480.0 && send.top() >= 0.0, "Send stays inside the window: {send:?}");
+    assert!(model.bottom() <= 480.0, "the model control stays inside the window: {model:?}");
+    c.shot("review-short-window-03-long-draft");
+    c.record("send_rect", json!(format!("{send:?}")));
+    c.finish(json!({ "status": "pass", "list": format!("{list:?}"), "send": format!("{send:?}") }));
 }

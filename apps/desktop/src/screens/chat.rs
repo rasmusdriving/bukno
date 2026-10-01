@@ -126,6 +126,7 @@ fn draw_composer(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
         effort: "Medium",
         effort_level: 3,
         permission: "Synthetic engine",
+        send_blocked: app.send_blocked(),
     };
     match composer::show(ui, &theme, rect, &mut app.composer, &props) {
         Some(ComposerAction::Send) => app.submit(),
@@ -138,16 +139,35 @@ fn new_chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
     let theme = app.theme.clone();
     let c = &theme.color;
     let column = column_rect(body, &theme);
-    let greeting_top = body.top() + 128.0;
-    ui.painter().text(
-        pos2(column.center().x, greeting_top + 17.0),
-        Align2::CENTER_CENTER,
-        "What should we work on?",
-        theme.font(&theme.text.t_display),
-        c.text_primary,
-    );
-    let height = composer::height_for(ui, &theme, &app.composer, column.width());
-    let rect = Rect::from_min_size(pos2(column.left(), greeting_top + 34.0 + 24.0), vec2(column.width(), height));
+    // Height budget: greeting, composer and the project line must fit, so
+    // short windows shrink the top space first, then drop the greeting.
+    const GREETING: f32 = 34.0 + 24.0;
+    const META: f32 = 36.0 + 16.0;
+    const MARGIN: f32 = 16.0;
+    let with_greeting = body.height() - 2.0 * MARGIN - GREETING - META;
+    // Keep the greeting while at least the smallest composer fits beside it.
+    let minimum = composer::height_for(ui, &theme, &app.composer, column.width(), 0.0);
+    let show_greeting = with_greeting >= minimum;
+    let budget = if show_greeting { with_greeting } else { body.height() - 2.0 * MARGIN - META };
+    let height = composer::height_for(ui, &theme, &app.composer, column.width(), budget);
+    let content = height + META + if show_greeting { GREETING } else { 0.0 };
+    // 128 points above the greeting, as in the reference, whenever it all
+    // fits; only a window too short for that moves it up. Typing never
+    // moves the greeting while there is room.
+    let top = body.top() + (body.height() - content - MARGIN).clamp(MARGIN, 128.0);
+    let composer_top = if show_greeting {
+        ui.painter().text(
+            pos2(column.center().x, top + 17.0),
+            Align2::CENTER_CENTER,
+            "What should we work on?",
+            theme.font(&theme.text.t_display),
+            c.text_primary,
+        );
+        top + GREETING
+    } else {
+        top
+    };
+    let rect = Rect::from_min_size(pos2(column.left(), composer_top), vec2(column.width(), height));
     draw_composer(app, ui, rect);
     let meta_y = rect.bottom() + 36.0;
     let painter = ui.painter();
@@ -211,7 +231,9 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
     }
 
     // Composer at the bottom, then the transcript fills the space between.
-    let composer_h = composer::height_for(ui, &theme, &app.composer, column.width());
+    // The transcript keeps at least 120 points; the composer scrolls inside beyond that.
+    let composer_max = body.height() - 36.0 - 120.0 - theme.size.size_inset_bottom;
+    let composer_h = composer::height_for(ui, &theme, &app.composer, column.width(), composer_max);
     let composer_rect = Rect::from_min_size(
         pos2(column.left(), body.bottom() - theme.size.size_inset_bottom - composer_h),
         vec2(column.width(), composer_h),
