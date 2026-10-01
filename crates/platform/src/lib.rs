@@ -26,6 +26,16 @@ pub unsafe fn place_window_buttons(
     unsafe { macos::place_window_buttons(ns_view, left, center_from_top, spacing) }
 }
 
+/// The window buttons' frames after placement, for evidence.
+///
+/// # Safety
+/// `ns_view` must be the window's live `NSView`, on the main thread.
+#[cfg(target_os = "macos")]
+pub unsafe fn window_button_frames(ns_view: std::ptr::NonNull<std::ffi::c_void>) -> Vec<[f64; 4]> {
+    // SAFETY: forwarded from the caller.
+    unsafe { macos::window_button_frames(ns_view) }
+}
+
 /// Whether the user asked the system to reduce motion.
 ///
 /// `None` means Bukno cannot read the setting on this platform yet.

@@ -20,6 +20,18 @@ fi
 
 mkdir -p "$target_dir"
 
+# Evidence goes next to the repositories when the workspace has an
+# artifacts folder (dev/artifacts/bukno on the Toshiba workspace), otherwise
+# into the cache folder on the internal drive.
+if [ -n "${BUKNO_ARTIFACTS_DIR:-}" ]; then
+    artifacts_dir="$BUKNO_ARTIFACTS_DIR"
+elif [ -d "$repo/../../../artifacts" ]; then
+    artifacts_dir="$(cd "$repo/../../../artifacts" && pwd)/bukno"
+else
+    artifacts_dir="$HOME/Library/Caches/bukno/artifacts"
+fi
+mkdir -p "$artifacts_dir"
+
 developer_dir=""
 # The Xcode linker refuses to run until its license is accepted. The Command Line
 # Tools work without that step, so use them for Cargo only when Xcode is blocked.
@@ -36,9 +48,10 @@ fi
     echo "# Written by scripts/bootstrap.sh for this machine. Not committed."
     echo "[build]"
     echo "target-dir = \"$target_dir\""
+    echo
+    echo "[env]"
+    echo "BUKNO_ARTIFACTS_DIR = \"$artifacts_dir\""
     if [ -n "$developer_dir" ]; then
-        echo
-        echo "[env]"
         echo "# Xcode license not accepted on this machine; link with the Command Line Tools."
         echo "DEVELOPER_DIR = \"$developer_dir\""
     fi
@@ -55,4 +68,5 @@ if [ -n "$developer_dir" ]; then
 else
     echo "  linker:          $(xcode-select -p)"
 fi
+echo "  evidence:        $artifacts_dir"
 echo "  local config:    $local_config"

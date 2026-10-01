@@ -40,3 +40,29 @@ pub unsafe fn place_window_buttons(ns_view: NonNull<c_void>, left: f64, center_f
         }
     }
 }
+
+/// Frames of the three window buttons as (x, y from the window top, width,
+/// height) in points, for evidence that the placement took effect.
+///
+/// # Safety
+/// Same as [`place_window_buttons`].
+pub unsafe fn window_button_frames(ns_view: NonNull<c_void>) -> Vec<[f64; 4]> {
+    // SAFETY: the caller guarantees a live NSView on the main thread.
+    let view: &NSView = unsafe { ns_view.cast().as_ref() };
+    let Some(window) = view.window() else { return Vec::new() };
+    let window_height = window.frame().size.height;
+    [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton]
+        .into_iter()
+        .filter_map(|kind| {
+            let button = window.standardWindowButton(kind)?;
+            // Convert to window coordinates (origin bottom-left), then flip.
+            let frame = button.convertRect_toView(button.bounds(), None);
+            Some([
+                frame.origin.x,
+                window_height - frame.origin.y - frame.size.height,
+                frame.size.width,
+                frame.size.height,
+            ])
+        })
+        .collect()
+}

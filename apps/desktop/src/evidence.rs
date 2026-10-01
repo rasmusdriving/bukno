@@ -52,6 +52,8 @@ pub struct Evidence {
     screenshot_requested: bool,
     quiet_started: bool,
     done: bool,
+    /// macOS window button frames after placement: x, y from top, w, h.
+    pub window_buttons: Vec<[f64; 4]>,
 }
 
 impl Evidence {
@@ -81,6 +83,7 @@ impl Evidence {
             screenshot_requested: false,
             quiet_started: false,
             done: false,
+            window_buttons: Vec::new(),
         }
     }
 
@@ -105,7 +108,17 @@ impl Evidence {
             });
             if let Some(image) = shot {
                 self.save_png(&image);
-                self.finish(ctx, json!({ "screenshot": "screen.png", "size": image.size, "pixels_per_point": ctx.pixels_per_point() }));
+                let buttons = self.window_buttons.clone();
+                self.finish(
+                    ctx,
+                    json!({
+                        "screenshot": "screen.png",
+                        "size": image.size,
+                        "pixels_per_point": ctx.pixels_per_point(),
+                        "window_buttons_points": buttons,
+                        "note": "The screenshot is the app's own frame; the OS draws the traffic lights on top, so they are reported by position instead.",
+                    }),
+                );
             }
         }
     }

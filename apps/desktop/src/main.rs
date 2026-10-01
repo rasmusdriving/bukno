@@ -47,7 +47,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Bukno")
-            .with_app_id("se.brilliantfuture.bukno")
+            .with_app_id("io.github.rasmusdriving.bukno")
             .with_inner_size(size)
             .with_min_inner_size([640.0, 480.0])
             .with_fullsize_content_view(true)

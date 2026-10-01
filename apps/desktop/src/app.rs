@@ -233,6 +233,8 @@ impl BuknoApp {
                 let center = f64::from(self.theme.size.size_titlebar) / 2.0;
                 // SAFETY: eframe gives us the live view, and ui() runs on the main thread.
                 unsafe { bukno_platform::place_window_buttons(appkit.ns_view, 18.0, center, 20.0) };
+                // SAFETY: as above.
+                self.evidence.window_buttons = unsafe { bukno_platform::window_button_frames(appkit.ns_view) };
             }
         }
         #[cfg(not(target_os = "macos"))]
