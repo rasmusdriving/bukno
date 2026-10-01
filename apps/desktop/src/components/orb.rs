@@ -112,11 +112,15 @@ pub fn working_indicator(ui: &mut Ui, theme: &Theme, rect: Rect, w: &Working<'_>
         painter.galley(pos2(x, rect.top() + 28.0), galley, c.text_secondary);
     }
 
+    // egui shortens every scheduled repaint by its predicted frame time
+    // (about 16 ms), which turned a 50 ms request into roughly 30 fps.
+    // Add it back so the cap holds.
+    let predicted = Duration::from_secs_f32(ui.input(|i| i.predicted_dt).clamp(0.0, 0.1));
     if animate {
-        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.0 / ORB_FPS));
+        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.0 / ORB_FPS) + predicted);
     } else if w.elapsed.is_some() && w.state == OrbState::Thinking {
         // The still variant only needs the clock to tick.
-        ui.ctx().request_repaint_after(Duration::from_secs(1));
+        ui.ctx().request_repaint_after(Duration::from_secs(1) + predicted);
     }
     let _ = vec2;
 }

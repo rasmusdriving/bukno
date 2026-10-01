@@ -660,8 +660,8 @@ fn repaint_policy() {
         idle.step(1);
         delays.push(repaint_delay(&idle.harness).as_secs_f64() * 1000.0);
     }
-    // The next frame is due one frame time after the reported delay.
-    let orb_delay = repaint_delay(&idle.harness) + Duration::from_secs_f32(STEP_DT);
+    // The orb adds back egui's predicted frame time, so the reported delay is the cadence.
+    let orb_delay = repaint_delay(&idle.harness);
     idle.record("orb_repaint_delays_ms", json!(delays));
     assert!(orb_delay >= Duration::from_millis(49), "orb never asks for more than 20 fps: {orb_delay:?}");
     assert!(orb_delay <= Duration::from_millis(51), "orb keeps its 20 fps cadence: {orb_delay:?}");
@@ -671,7 +671,7 @@ fn repaint_policy() {
     reduced.step(2);
     reduced.send(ViewUpdate::RunStateChanged { task: synthetic::TASK, run: STREAM_RUN, state: RunState::Running });
     reduced.step(3);
-    let reduced_delay = repaint_delay(&reduced.harness) + Duration::from_secs_f32(STEP_DT);
+    let reduced_delay = repaint_delay(&reduced.harness);
     assert!(reduced_delay >= Duration::from_millis(999), "reduced motion only ticks the clock: {reduced_delay:?}");
     reduced.finish(json!({ "status": "pass" }));
 
