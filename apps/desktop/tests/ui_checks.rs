@@ -943,7 +943,10 @@ fn review_ime_cancel_after_focus_loss() {
     c.step(2);
     let sent = submits(&c);
     assert_eq!(sent.len(), 1, "Enter sends again");
-    assert!(sent[0].ends_with("Ready to send") && !sent[0].contains('\n'));
+    // Like a native macOS field, text composed before focus left stays in
+    // the draft as typed text. It is visible before sending; nothing hidden
+    // or half-composed is sent.
+    assert_eq!(sent[0], "にReady to send", "exactly the visible draft is sent, without a newline");
     c.finish(json!({ "status": "pass", "sent": sent[0] }));
 }
 
