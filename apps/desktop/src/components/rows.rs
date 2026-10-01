@@ -30,6 +30,7 @@ pub struct Row<'a> {
 /// One 32-point navigation row. Selection is a fill only; focus adds the ring.
 pub fn row(ui: &mut Ui, theme: &Theme, rect: Rect, row: Row<'_>) -> Response {
     let response = ui.interact(rect, row.id, Sense::click());
+    reveal_on_focus(&response);
     let label = row.label.clone().unwrap_or_else(|| row.title.to_owned());
     response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, row.selected, &label));
     let c = &theme.color;
@@ -91,9 +92,17 @@ pub fn row(ui: &mut Ui, theme: &Theme, rect: Rect, row: Row<'_>) -> Response {
     response
 }
 
+/// A row in a scrolling list scrolls itself into view when Tab reaches it.
+fn reveal_on_focus(response: &Response) {
+    if response.gained_focus() {
+        response.scroll_to_me(None);
+    }
+}
+
 /// A collapsible project header.
 pub fn project_row(ui: &mut Ui, theme: &Theme, rect: Rect, id: Id, name: &str, open: bool) -> Response {
     let response = ui.interact(rect, id, Sense::click());
+    reveal_on_focus(&response);
     response.widget_info(|| {
         let mut info = WidgetInfo::labeled(WidgetType::CollapsingHeader, true, name);
         info.selected = Some(open);

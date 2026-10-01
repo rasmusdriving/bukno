@@ -1023,6 +1023,26 @@ fn review_short_window_layout() {
     let profile = c.harness.get_by_label("Profile, Synthetic scenario").rect();
     assert!(list.bottom() <= profile.top() - 70.0, "the list ends above the usage meters: {list:?} vs {profile:?}");
     c.shot("review-short-window-01-chat");
+    // Keyboard: Tab to a row hidden below the visible list; it scrolls into view.
+    let target = "A quick idea, Claude chat";
+    let before = c.harness.get_by_label(target).rect();
+    assert!(before.top() >= list.bottom(), "the row starts hidden below the list: {before:?}");
+    let mut tabs = 0;
+    while !c.harness.get_by_label(target).accesskit_node().is_focused() {
+        c.harness.key_press(Key::Tab);
+        c.step(3);
+        tabs += 1;
+        assert!(tabs < 20, "Tab never reached {target}");
+    }
+    let focused = c.harness.get_by_label(target).rect();
+    assert!(
+        focused.top() >= list.top() - 0.5 && focused.bottom() <= list.bottom() + 0.5,
+        "Tab scrolls the row into the list: {focused:?} in {list:?}"
+    );
+    c.record(
+        "tab_scrolls_row_into_view",
+        json!({ "before": format!("{before:?}"), "focused": format!("{focused:?}") }),
+    );
     // Scroll the list to its end: the last chat sits inside the list, above the footer.
     c.harness.event(Event::PointerMoved(list.center()));
     c.harness.event(Event::MouseWheel {
