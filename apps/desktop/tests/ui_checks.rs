@@ -651,7 +651,7 @@ fn repaint_delay(harness: &Harness<'_, BuknoApp>) -> Duration {
     harness.output().viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay)
 }
 
-/// Covers F10: no repaint when idle, orb capped at 20 fps, reduced motion still.
+/// Covers F10: no repaint when idle, the working streak capped at 10 fps, reduced motion still.
 #[test]
 fn repaint_policy() {
     let mut idle = Check::new("repaint-policy", "short", [1440.0, 900.0], false);
@@ -665,11 +665,11 @@ fn repaint_policy() {
         idle.step(1);
         delays.push(repaint_delay(&idle.harness).as_secs_f64() * 1000.0);
     }
-    // The orb adds back egui's predicted frame time, so the reported delay is the cadence.
+    // The indicator adds back egui's predicted frame time, so the reported delay is the cadence.
     let orb_delay = repaint_delay(&idle.harness);
-    idle.record("orb_repaint_delays_ms", json!(delays));
-    assert!(orb_delay >= Duration::from_millis(49), "orb never asks for more than 20 fps: {orb_delay:?}");
-    assert!(orb_delay <= Duration::from_millis(51), "orb keeps its 20 fps cadence: {orb_delay:?}");
+    idle.record("working_repaint_delays_ms", json!(delays));
+    assert!(orb_delay >= Duration::from_millis(99), "the streak never asks for more than 10 fps: {orb_delay:?}");
+    assert!(orb_delay <= Duration::from_millis(101), "the streak keeps its 10 fps cadence: {orb_delay:?}");
     idle.shot("repaint-01-orb");
 
     let mut reduced = Check::new("repaint-policy-reduced", "short", [1440.0, 900.0], true);
@@ -684,7 +684,7 @@ fn repaint_policy() {
         "status": "pass",
         "idle_steps_until_settled": steps,
         "idle_repaint_delay": "none requested",
-        "orb_repaint_delay_ms": orb_delay.as_secs_f64() * 1000.0,
+        "working_repaint_delay_ms": orb_delay.as_secs_f64() * 1000.0,
         "reduced_motion_repaint_delay_ms": reduced_delay.as_secs_f64() * 1000.0,
     }));
 }
@@ -761,6 +761,71 @@ fn working_treatments() {
     std::fs::write(
         dir.join("result.json"),
         serde_json::to_string_pretty(&json!({ "status": "pass", "treatments": summary })).unwrap(),
+    )
+    .unwrap();
+}
+
+/// Records the native StreakLabel at several frame rates as animated GIFs
+/// with the real frame timing, so smoothness can be judged by eye.
+#[test]
+fn streak_frame_rates() {
+    use bukno_desktop::components::orb::{self, Mark, OrbState, Working};
+    use image::codecs::gif::{GifEncoder, Repeat};
+    use image::{Delay, Frame};
+
+    let dir = evidence_root().join("streak-frame-rates");
+    std::fs::create_dir_all(&dir).unwrap();
+    let theme = Theme::load();
+    let mut results = Vec::new();
+    for fps in [10.0_f32, 12.0, 15.0, 60.0] {
+        let dt = 1.0 / fps;
+        let t = theme.clone();
+        let mut installed = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(520.0, 64.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(dt)
+            .wgpu()
+            .build_ui(move |ui| {
+                if !installed {
+                    // Fonts take effect from the next frame.
+                    t.install(ui.ctx());
+                    installed = true;
+                    return;
+                }
+                ui.painter().rect_filled(ui.max_rect(), 0.0, t.color.surface_canvas);
+                let rect = egui::Rect::from_min_size(ui.max_rect().min + Vec2::new(16.0, 12.0), Vec2::new(480.0, 40.0));
+                orb::working_indicator(
+                    ui,
+                    &t,
+                    rect,
+                    &Working {
+                        accent: t.color.codex,
+                        label: "Reading the composer module",
+                        elapsed: Some(40.0),
+                        summary: None,
+                        state: OrbState::Thinking,
+                        reduce_motion: false,
+                        mark: Mark::Streak,
+                    },
+                );
+            });
+        let file = std::fs::File::create(dir.join(format!("streak-{fps:.0}fps.gif"))).unwrap();
+        let mut gif = GifEncoder::new_with_speed(file, 10);
+        gif.set_repeat(Repeat::Infinite).unwrap();
+        // Two full passes of the light (loop-streak is 2.2 s).
+        let frames = (4.4 * fps).round() as usize;
+        harness.step();
+        for _ in 0..frames {
+            harness.step();
+            let image = harness.render().expect("render");
+            gif.encode_frame(Frame::from_parts(image, 0, 0, Delay::from_numer_denom_ms(1000, fps as u32))).unwrap();
+        }
+        results.push(json!({ "fps": fps, "frames": frames }));
+    }
+    std::fs::write(
+        dir.join("result.json"),
+        serde_json::to_string_pretty(&json!({ "status": "pass", "gifs": results })).unwrap(),
     )
     .unwrap();
 }

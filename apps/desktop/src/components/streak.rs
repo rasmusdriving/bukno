@@ -1,4 +1,4 @@
-//! StreakLabel: the proposed working treatment
+//! StreakLabel: the working treatment
 //! (docs/design/system/components/StreakLabel). The activity words in
 //! `text-tertiary` with a soft light passing through them once per
 //! `loop-streak`. The light is applied per vertex of the laid-out text, so
@@ -10,8 +10,9 @@ use egui::epaint::{Mesh, Vertex};
 use egui::{Color32, Galley, Painter, Pos2, Shape, TextureId};
 
 /// Frames a second for the streak. Soft and slow, so it stays smooth at a
-/// lower rate than the orb needs.
-pub const STREAK_FPS: f32 = 15.0;
+/// lower rate than the orb needs. Measured in the packaged app: 2.5 % of one
+/// core at 10 fps, 3.0 % at 12 and 3.7 % at 15 (budget: under 3 %).
+pub const STREAK_FPS: f32 = 10.0;
 /// Width of the light in points, whatever the length of the text.
 const BAND_WIDTH: f32 = 120.0;
 

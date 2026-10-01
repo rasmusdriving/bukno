@@ -1,5 +1,6 @@
-//! ThinkingOrb and WorkingIndicator: the one moving element at the end of
-//! the transcript while a run is active.
+//! WorkingIndicator: the one moving element at the end of the transcript
+//! while a run is active. The StreakLabel is the default treatment; the
+//! ThinkingOrb and BuildGrid are kept for comparison.
 //!
 //! The orb is a dotted sphere drawn with circles. It animates through
 //! scheduled repaints capped at [`ORB_FPS`]; with reduced motion, or while
@@ -28,22 +29,22 @@ pub fn orb_fps() -> f32 {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mark {
-    /// The approved ThinkingOrb.
+    /// The earlier ThinkingOrb, kept for comparison.
     Orb,
-    /// Proposed: the stepped BuildGrid.
+    /// The stepped BuildGrid proposal, kept for comparison.
     Grid,
-    /// Proposed: the StreakLabel, with no separate mark.
+    /// The StreakLabel: the activity words carry the light. The default.
     Streak,
 }
 
 impl Mark {
-    /// The orb is the approved design; the proposals are chosen with
-    /// `BUKNO_WORKING_MARK=grid` or `BUKNO_WORKING_MARK=streak`.
+    /// The StreakLabel is the approved treatment (decision 35). The others
+    /// stay selectable for comparison with `BUKNO_WORKING_MARK=orb` or `grid`.
     pub fn from_env() -> Self {
         match std::env::var("BUKNO_WORKING_MARK").ok().as_deref() {
             Some("grid") => Self::Grid,
-            Some("streak") => Self::Streak,
-            _ => Self::Orb,
+            Some("orb") => Self::Orb,
+            _ => Self::Streak,
         }
     }
 }
