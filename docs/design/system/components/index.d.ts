@@ -109,11 +109,11 @@ export interface ThinkingOrbProps { provider: Provider; state?: 'thinking' | 're
 export declare function ThinkingOrb(props: ThinkingOrbProps): React.ReactElement;
 
 /** The quiet live line at the end of the transcript while an agent works. */
-/** Proposed replacement for ThinkingOrb: a stepped 3 by 3 block grid. */
+/** Reference only: the stepped 3 by 3 block grid proposal. */
 export interface BuildGridProps { provider: Provider; state?: 'thinking' | 'reading' | 'tool' | 'waiting'; size?: number; still?: boolean; step?: number; label?: string }
 export declare function BuildGrid(props: BuildGridProps): React.ReactElement;
 
-/** Proposed working treatment: the activity words with a soft light passing through. */
+/** The working treatment: the activity words with a soft light passing through (default since decision 35). */
 export interface StreakLabelProps { provider: Provider; state?: 'thinking' | 'reading' | 'tool' | 'waiting'; text?: string; children?: React.ReactNode; still?: boolean; phase?: number }
 export declare function StreakLabel(props: StreakLabelProps): React.ReactElement;
 

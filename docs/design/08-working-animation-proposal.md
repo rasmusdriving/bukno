@@ -1,7 +1,8 @@
 # Working animation proposal
 
-Written 1 October 2026 after Pass 0. Status: **proposed, not approved**. The
-approved design still uses the `ThinkingOrb`. Rasmus chooses.
+Written 1 October 2026 after Pass 0. Status: **decided the same day.** Rasmus
+chose the StreakLabel at 10 frames a second (decision 35). The BuildGrid and
+the ThinkingOrb stay in the component set for reference.
 
 ## Why look again
 
@@ -68,8 +69,11 @@ UI check `working_treatments` (frames at fixed moments plus the redraw
 cadence: orb every 50 ms, BuildGrid only at its 160 ms step boundaries,
 StreakLabel every 67 ms at 15 fps).
 
-Only the BuildGrid meets the 3 % proposal. The StreakLabel comes close at
-12 fps and costs about a third less than the orb at its own rate.
+Follow-up at 10 fps, all samples at their frame cap: **StreakLabel 2.53 to
+2.58 %**, 12 fps 2.95 to 2.96 %, 15 fps 3.7 %. Native recordings at 10, 12,
+15 and 60 fps are produced by the UI check `streak_frame_rates`.
+
+Decision: StreakLabel at 10 fps, under the 3 % budget with some headroom.
 
 ## How to look at them
 
@@ -91,9 +95,10 @@ BUKNO_WORKING_MARK=streak BUKNO_ORB_FPS=12 ~/Library/Caches/bukno/cargo-target/b
 The streak's smoothness at 12 fps needs a look on screen; the stills cannot
 show it.
 
-## If one is approved
+## Done after the decision
 
-Make it the `WorkingIndicator` default, update the motion table in the
-[system README](system/README.md), re-export the journey screens that show
-the orb (2.1, 2.2, 2.3, 3.1 to 3.3, 5.1), and keep `ThinkingOrb` only if
-another place still needs it.
+The `WorkingIndicator` defaults to the StreakLabel, the motion table in the
+[system README](system/README.md) describes it, and the journey screens that
+showed the orb (2.1, 2.2, 2.3, 3.1 to 3.3, 5.1) are re-exported. The native
+app uses it by default at 10 fps; `BUKNO_WORKING_MARK=orb` or `grid` shows the
+others.

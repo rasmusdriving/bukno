@@ -69,7 +69,7 @@ Pass 0 blocker.
   afterwards: 160 MB while drawing, 62 MB once idle. Frame times unchanged.
 - Orb frame rate: 29 fps before, 19.5 fps after.
 
-## Budget decision needed: orb CPU
+## Orb CPU budget (resolved by decision 35)
 
 Proposed target: under 3 % of one core with only the orb animating. Measured
 in the packaged app (two samples each):
@@ -94,8 +94,9 @@ Pass 3 experiment with a separately composited native layer for the orb.
 Follow-up the same day: two cheaper treatments are proposed in
 [design/08-working-animation-proposal.md](design/08-working-animation-proposal.md).
 Measured the same way, the stepped BuildGrid uses 1.7 to 2.1 % and the
-StreakLabel at 12 fps uses 3.1 to 3.4 %. Both are behind
-`BUKNO_WORKING_MARK` until one is approved.
+StreakLabel at 12 fps uses 3.1 to 3.4 %. Rasmus chose the StreakLabel at
+10 fps (decision 35): 2.53 to 2.58 % measured, under the budget. It is now
+the default; `BUKNO_WORKING_MARK=orb` or `grid` shows the others.
 
 ## Deviations from the design, recorded rather than hidden
 

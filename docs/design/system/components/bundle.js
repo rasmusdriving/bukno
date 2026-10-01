@@ -717,12 +717,13 @@
     var provider = p.provider === 'claude' ? 'claude' : 'codex';
     var waiting = p.state === 'waiting';
     var style = {};
-    if (p.phase != null) {
+    var phase = p.phase != null ? p.phase : (typeof window !== 'undefined' ? window.BUKNO_STREAK_PHASE : undefined);
+    if (phase != null) {
       var dur = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--loop-streak')) || 2200;
-      style.animationDelay = (-num(p.phase, 0) * dur) + 'ms';
+      style.animationDelay = (-num(phase, 0) * dur) + 'ms';
     }
     return h('span', {
-      className: cx('bk-streak', provider === 'claude' && 'bk-streak--claude', (on(p.still) || p.phase != null) && 'bk-streak--still', waiting && 'bk-streak--waiting', p.className),
+      className: cx('bk-streak', provider === 'claude' && 'bk-streak--claude', (on(p.still) || phase != null) && 'bk-streak--still', phase != null && 'bk-streak--frozen', waiting && 'bk-streak--waiting', p.className),
       style: style
     }, p.children || p.text);
   }
@@ -733,7 +734,8 @@
     var state = p.state || 'thinking';
     var label = p.activity || ORB_STATES[state] || 'Thinking';
     var trail = list(p.trail).map(function (t) { return typeof t === 'string' ? t : t.text; });
-    var streak = p.mark === 'streak';
+    // The StreakLabel is the default (decision 35); 'orb' and 'grid' are kept for reference.
+    var streak = p.mark !== 'orb' && p.mark !== 'grid';
     var mark = streak ? null : p.mark === 'grid'
       ? h(BuildGrid, { provider: provider, state: state, size: num(p.size, 32), still: p.still })
       : h(ThinkingOrb, { provider: provider, state: state, size: num(p.size, 32), still: p.still });

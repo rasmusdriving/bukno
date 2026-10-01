@@ -335,8 +335,8 @@ body { margin: 0; background: var(--surface-canvas); color: var(--text-primary);
 @keyframes bk-streak { from { background-position: calc(-1 * var(--streak-width)) 0, 0 0; } to { background-position: calc(100% + var(--streak-width)) 0, 0 0; } }
 .bk-working--streak .bk-working__text { padding-top: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .bk-streak { animation: none !important; background: none !important; color: var(--text-primary) !important; }
-  .bk-working__label, .bk-working__summary, .bk-effortlg__glint, .bk-effortlg--max .bk-effortlg__track { animation: none !important; }
+  .bk-streak:not(.bk-streak--frozen) { animation: none !important; background: none !important; color: var(--text-primary) !important; }
+  .bk-working__label:not(.bk-streak--frozen), .bk-working__summary, .bk-effortlg__glint, .bk-effortlg--max .bk-effortlg__track { animation: none !important; }
 }
 
 /* To-do: the selected agent's plan, in the right panel under Delegated work */

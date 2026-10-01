@@ -70,10 +70,10 @@ Then open `http://localhost:8000/journey/viewer.html` for the journey (click a s
 To re-export one screen image with Chrome while the server runs:
 
 ```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --force-prefers-reduced-motion --window-size=1440,900 --virtual-time-budget=5000 --screenshot=docs/design/journey/screens/2-1-codex-at-work.png "http://localhost:8000/journey/viewer.html?screen=CodexWorking"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --force-prefers-reduced-motion --window-size=1440,900 --virtual-time-budget=5000 --screenshot=docs/design/journey/screens/2-1-codex-at-work.png "http://localhost:8000/journey/viewer.html?screen=CodexWorking&streakPhase=0.35"
 ```
 
-Reduced motion makes the orb draw one still frame. If Chrome does not exit on its own once the image is written, stop it.
+Reduced motion stops every loop; `streakPhase` freezes the working light at one point so the export still shows it. If Chrome does not exit on its own once the image is written, stop it.
 
 ## Editing in Claude Design
 

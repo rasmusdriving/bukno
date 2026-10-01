@@ -1,6 +1,6 @@
 # BuildGrid
 
-Proposed replacement for `ThinkingOrb` (not yet approved). The working mark at the end of the transcript: nine small blocks on a 3 by 3 grid, with work placed one block at a time. Bukno is build plus knowledge; the mark shows something being built, calmly, in hard steps.
+Reference only. This was the stepped alternative to the `ThinkingOrb`; Rasmus chose the `StreakLabel` instead (decision 35). The working mark at the end of the transcript: nine small blocks on a 3 by 3 grid, with work placed one block at a time. Bukno is build plus knowledge; the mark shows something being built, calmly, in hard steps.
 
 - Provide `provider`, `state` (`thinking`, `reading`, `tool`, `waiting`) and `size` (32 in the chat, 20 inline, 16 in a row).
 - Blocks have four levels: empty (`surface-raised`), a faint trace (`text-disabled`), placed (`text-secondary`) and the newest block in the provider colour. The provider colour only ever marks the newest block, so it shows where the work is without tinting the mark.

@@ -1,5 +1,7 @@
 # ThinkingOrb
 
+Reference only since 1 October 2026: the `StreakLabel` replaced it in the `WorkingIndicator` because the orb cost about 5 % of a CPU core in the native app (decision 35).
+
 A small dotted sphere that shows an agent is working, drawn on a 2D canvas. It is the live mark in the chat while you watch a run.
 
 - Provide `provider`, `state` (`thinking`, `reading`, `tool`, `waiting`) and `size` (32 in the chat, 20 inline).
