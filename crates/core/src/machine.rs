@@ -1,8 +1,8 @@
 //! The coordinator's decision function: current state plus one input gives
 //! the new state and a list of effects.
 //!
-//! Pass 0 skeleton. It implements the send path through the outbox, streaming
-//! into a reply, Stop, and connection loss. Approvals, steering, queues,
+//! Pass 0 skeleton. It implements connection identity, the send path through
+//! the outbox, streaming into a reply, Stop, and connection loss. Approvals, steering, queues,
 //! leases and restart reconciliation land with Pass 1.
 
 use std::collections::HashMap;
@@ -34,11 +34,16 @@ struct Delivery {
     run: RunId,
     state: DeliveryState,
     body: String,
+    /// The "about to send" record is committed; the turn may be written
+    /// once an engine connection exists.
+    recorded: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Machine {
-    generation: u64,
+    /// The live engine connection, set by `Connected` and cleared by
+    /// `ConnectionLost`. Nothing is written to an engine without one.
+    connection: Option<u64>,
     runs: HashMap<RunId, Run>,
     active_run: HashMap<TaskId, RunId>,
     deliveries: HashMap<MessageId, Delivery>,
@@ -101,8 +106,10 @@ impl Machine {
                     },
                 );
                 self.active_run.insert(task, run);
-                self.deliveries
-                    .insert(message, Delivery { task, run, state: DeliveryState::AboutToSend, body: body.clone() });
+                self.deliveries.insert(
+                    message,
+                    Delivery { task, run, state: DeliveryState::AboutToSend, body: body.clone(), recorded: false },
+                );
                 let user_item = TranscriptItem {
                     id: item,
                     task,
@@ -144,36 +151,11 @@ impl Machine {
                 let Some(delivery) = self.deliveries.get_mut(&message) else {
                     return;
                 };
-                if delivery.state != DeliveryState::AboutToSend {
-                    return;
+                delivery.recorded = true;
+                // Without a connection the run waits in Preparing for `Connected`.
+                if let Some(generation) = self.connection {
+                    self.start_turn(message, generation, fx);
                 }
-                let Some(run) = self.runs.get_mut(&delivery.run) else {
-                    return;
-                };
-                if run.state != RunState::Preparing {
-                    return;
-                }
-                // Only after the commit may the frame be written to the engine.
-                delivery.state = DeliveryState::Sent;
-                run.state = RunState::Starting;
-                run.generation = Some(self.generation);
-                fx.push(Effect::Engine(EngineRequest::StartTurn {
-                    task: delivery.task,
-                    run: delivery.run,
-                    message,
-                    body: delivery.body.clone(),
-                }));
-                fx.push(Effect::Persist(PersistRequest::DeliveryState { message, state: DeliveryState::Sent }));
-                fx.push(Effect::Publish(ViewUpdate::DeliveryChanged {
-                    task: delivery.task,
-                    message,
-                    state: DeliveryState::Sent,
-                }));
-                fx.push(Effect::Publish(ViewUpdate::RunStateChanged {
-                    task: delivery.task,
-                    run: delivery.run,
-                    state: RunState::Starting,
-                }));
             }
             StorageResult::DeliveryFailed { message, reason } => {
                 let Some(delivery) = self.deliveries.remove(&message) else {
@@ -191,13 +173,37 @@ impl Machine {
     }
 
     fn on_engine(&mut self, event: EngineEvent, fx: &mut Vec<Effect>) {
-        if event.connection_generation < self.generation {
-            return; // Late event from a connection that has since been replaced.
-        }
-        self.generation = event.connection_generation;
-
+        let generation = event.connection_generation;
         match event.kind {
+            EngineEventKind::Connected => {
+                match self.connection {
+                    Some(current) if current == generation => return,
+                    // A replacement connection means the old one is gone.
+                    Some(current) => self.lose_connection(current, fx),
+                    None => {}
+                }
+                self.connection = Some(generation);
+                let waiting: Vec<MessageId> = self
+                    .deliveries
+                    .iter()
+                    .filter(|(_, d)| d.recorded && d.state == DeliveryState::AboutToSend)
+                    .map(|(id, _)| *id)
+                    .collect();
+                for message in waiting {
+                    self.start_turn(message, generation, fx);
+                }
+            }
+            EngineEventKind::ConnectionLost => {
+                if self.connection != Some(generation) {
+                    return; // Not the live connection: nothing of ours was on it.
+                }
+                self.connection = None;
+                self.lose_connection(generation, fx);
+            }
             EngineEventKind::RunAccepted { run } => {
+                if !self.is_on_run_connection(run, generation) {
+                    return;
+                }
                 let Some(record) = self.runs.get_mut(&run) else {
                     return;
                 };
@@ -219,6 +225,9 @@ impl Machine {
                 fx.push(Effect::Publish(ViewUpdate::RunStateChanged { task, run, state: RunState::Running }));
             }
             EngineEventKind::TextDelta { run, item, delta } => {
+                if !self.is_on_run_connection(run, generation) {
+                    return;
+                }
                 let Some(record) = self.runs.get_mut(&run) else {
                     return;
                 };
@@ -247,6 +256,9 @@ impl Machine {
                 fx.push(Effect::Publish(ViewUpdate::ItemUpserted(entry.clone())));
             }
             EngineEventKind::ItemCompleted { run, item } => {
+                if !self.is_on_run_connection(run, generation) {
+                    return;
+                }
                 let Some(entry) = self.items.get_mut(&item).filter(|i| i.run == Some(run)) else {
                     return;
                 };
@@ -259,6 +271,9 @@ impl Machine {
                 fx.push(Effect::Publish(ViewUpdate::ItemUpserted(entry.clone())));
             }
             EngineEventKind::RunEnded { run, outcome } => {
+                if !self.is_on_run_connection(run, generation) {
+                    return;
+                }
                 let state = match outcome {
                     RunOutcome::Completed => RunState::Completed,
                     RunOutcome::Failed => RunState::Failed,
@@ -266,36 +281,72 @@ impl Machine {
                 };
                 self.settle(run, state, fx);
             }
-            EngineEventKind::ConnectionLost => {
-                let generation = event.connection_generation;
-                let affected: Vec<RunId> = self
-                    .runs
-                    .iter()
-                    .filter(|(_, r)| !r.state.is_terminal() && r.generation == Some(generation))
-                    .map(|(id, _)| *id)
-                    .collect();
-                for run in affected {
-                    if let Some(message) = self.runs.get(&run).map(|r| r.message)
-                        && let Some(delivery) = self.deliveries.get_mut(&message)
-                        && delivery.state == DeliveryState::Sent
-                    {
-                        // Written but never acknowledged: unknown, and never resent automatically.
-                        delivery.state = DeliveryState::Unknown;
-                        let task = delivery.task;
-                        fx.push(Effect::Persist(PersistRequest::DeliveryState {
-                            message,
-                            state: DeliveryState::Unknown,
-                        }));
-                        fx.push(Effect::Publish(ViewUpdate::DeliveryChanged {
-                            task,
-                            message,
-                            state: DeliveryState::Unknown,
-                        }));
-                    }
-                    self.settle(run, RunState::OutcomeUnknown, fx);
-                }
-            }
         }
+    }
+
+    /// Write a recorded delivery's turn to the engine on `generation`.
+    fn start_turn(&mut self, message: MessageId, generation: u64, fx: &mut Vec<Effect>) {
+        let Some(delivery) = self.deliveries.get_mut(&message) else {
+            return;
+        };
+        if delivery.state != DeliveryState::AboutToSend || !delivery.recorded {
+            return;
+        }
+        let Some(run) = self.runs.get_mut(&delivery.run) else {
+            return;
+        };
+        if run.state != RunState::Preparing {
+            return;
+        }
+        // Only after the commit, and only on a known connection, may the frame be written.
+        delivery.state = DeliveryState::Sent;
+        run.state = RunState::Starting;
+        run.generation = Some(generation);
+        fx.push(Effect::Engine(EngineRequest::StartTurn {
+            task: delivery.task,
+            run: delivery.run,
+            message,
+            body: delivery.body.clone(),
+        }));
+        fx.push(Effect::Persist(PersistRequest::DeliveryState { message, state: DeliveryState::Sent }));
+        fx.push(Effect::Publish(ViewUpdate::DeliveryChanged {
+            task: delivery.task,
+            message,
+            state: DeliveryState::Sent,
+        }));
+        fx.push(Effect::Publish(ViewUpdate::RunStateChanged {
+            task: delivery.task,
+            run: delivery.run,
+            state: RunState::Starting,
+        }));
+    }
+
+    /// Every unsettled run written to `generation` becomes OutcomeUnknown.
+    fn lose_connection(&mut self, generation: u64, fx: &mut Vec<Effect>) {
+        let affected: Vec<RunId> = self
+            .runs
+            .iter()
+            .filter(|(_, r)| !r.state.is_terminal() && r.generation == Some(generation))
+            .map(|(id, _)| *id)
+            .collect();
+        for run in affected {
+            if let Some(message) = self.runs.get(&run).map(|r| r.message)
+                && let Some(delivery) = self.deliveries.get_mut(&message)
+                && delivery.state == DeliveryState::Sent
+            {
+                // Written but never acknowledged: unknown, and never resent automatically.
+                delivery.state = DeliveryState::Unknown;
+                let task = delivery.task;
+                fx.push(Effect::Persist(PersistRequest::DeliveryState { message, state: DeliveryState::Unknown }));
+                fx.push(Effect::Publish(ViewUpdate::DeliveryChanged { task, message, state: DeliveryState::Unknown }));
+            }
+            self.settle(run, RunState::OutcomeUnknown, fx);
+        }
+    }
+
+    /// True when a run-scoped event comes from the connection its run was written to.
+    fn is_on_run_connection(&self, run: RunId, generation: u64) -> bool {
+        self.connection == Some(generation) && self.runs.get(&run).is_some_and(|r| r.generation == Some(generation))
     }
 
     /// Move a run to a terminal state and release what the coordinator held for it.

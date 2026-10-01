@@ -6,7 +6,8 @@ use std::thread;
 use std::time::Duration;
 
 use bukno_core::event::{
-    Command, Effect, EngineRequest, Input, PersistRequest, RejectReason, StorageResult, ViewUpdate,
+    Command, Effect, EngineEvent, EngineEventKind, EngineRequest, Input, PersistRequest, RejectReason, StorageResult,
+    ViewUpdate,
 };
 use bukno_core::ids::{ItemId, MessageId, RunId, TaskId};
 use bukno_core::machine::Machine;
@@ -94,6 +95,12 @@ async fn run(
     // answers). They are handled before the inbox is read again, so the loop
     // never waits on its own bounded channel.
     let mut local = VecDeque::new();
+    // The synthetic engine's one connection. A real adapter reports this
+    // after its handshake.
+    local.push_back(Input::Engine(EngineEvent {
+        connection_generation: synthetic::GENERATION,
+        kind: EngineEventKind::Connected,
+    }));
     local.push_back(Input::Stored(StorageResult::HistoryLoaded { task: synthetic::TASK, items: scenario.history() }));
     if let Some(body) = scenario.auto_submit.clone() {
         local.push_back(to_input(UiCommand::Submit {

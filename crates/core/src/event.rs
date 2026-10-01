@@ -45,10 +45,25 @@ pub struct EngineEvent {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EngineEventKind {
-    RunAccepted { run: RunId },
-    TextDelta { run: RunId, item: ItemId, delta: String },
-    ItemCompleted { run: RunId, item: ItemId },
-    RunEnded { run: RunId, outcome: RunOutcome },
+    /// A connection to the engine is ready. Turns are written only on a
+    /// connection the coordinator has seen established.
+    Connected,
+    RunAccepted {
+        run: RunId,
+    },
+    TextDelta {
+        run: RunId,
+        item: ItemId,
+        delta: String,
+    },
+    ItemCompleted {
+        run: RunId,
+        item: ItemId,
+    },
+    RunEnded {
+        run: RunId,
+        outcome: RunOutcome,
+    },
     ConnectionLost,
 }
 
