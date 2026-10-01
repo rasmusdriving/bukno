@@ -170,6 +170,20 @@ impl Theme {
         }
     }
 
+    /// A vertical fade from `color` at the top edge to transparent at the
+    /// bottom (or the reverse), used where content scrolls under a header.
+    pub fn paint_fade(&self, painter: &Painter, rect: Rect, color: Color32, opaque_top: bool) {
+        let (top, bottom) = if opaque_top { (color, Color32::TRANSPARENT) } else { (Color32::TRANSPARENT, color) };
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(rect.left_top(), top);
+        mesh.colored_vertex(rect.right_top(), top);
+        mesh.colored_vertex(rect.left_bottom(), bottom);
+        mesh.colored_vertex(rect.right_bottom(), bottom);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(1, 3, 2);
+        painter.add(Shape::mesh(mesh));
+    }
+
     /// The keyboard focus ring: a canvas-coloured gap, then the focus colour,
     /// following the element's radius.
     pub fn paint_focus_ring(&self, painter: &Painter, rect: Rect, radius: f32) {

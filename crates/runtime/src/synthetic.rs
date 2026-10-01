@@ -126,12 +126,12 @@ pub fn blocks(n: usize) -> Vec<GenBlock> {
     }
 
     let mut out = Vec::new();
-    if n % 14 == 0 {
+    if n.is_multiple_of(14) {
         out.push(GenBlock::Heading(format!("Sammanfattning för steg {n}")));
     }
     let mut first = vec![Inline::Text(format!("Meddelande {n}. "))];
     for i in 0..(2 + rng.pick(3)) {
-        if i == 1 && n % 4 == 0 {
+        if i == 1 && n.is_multiple_of(4) {
             first.push(Inline::Text("Jag ändrade ".into()));
             first.push(Inline::Code("composer.rs".into()));
             first.push(Inline::Text(" och ".into()));
@@ -143,14 +143,14 @@ pub fn blocks(n: usize) -> Vec<GenBlock> {
     trim_trailing_space(&mut first);
     out.push(GenBlock::Paragraph(first));
 
-    if n % 10 == 0 {
+    if n.is_multiple_of(10) {
         out.push(GenBlock::List(vec![
             format!("Läste layouten för meddelande {n}"),
             "Justerade avståndet i kompositören".into(),
             "Kontrollerade tangentbordsflödet med å, ä och ö".into(),
         ]));
     }
-    if n % 6 == 0 {
+    if n.is_multiple_of(6) {
         out.push(GenBlock::Code {
             lang: "rust",
             code: format!(
@@ -288,13 +288,15 @@ const REPLY_WORDS: &[&str] = &[
     "ut.",
 ];
 
+type StopFlag = Arc<AtomicBool>;
+
 /// The fake engine. It acknowledges a turn, streams words into one reply and
 /// ends the run, or stops early when interrupted.
 #[derive(Clone)]
 pub struct SyntheticEngine {
     inbox: mpsc::Sender<Input>,
     scenario: Arc<Scenario>,
-    running: Arc<std::sync::Mutex<Vec<(RunId, Arc<AtomicBool>)>>>,
+    running: Arc<std::sync::Mutex<Vec<(RunId, StopFlag)>>>,
 }
 
 impl SyntheticEngine {

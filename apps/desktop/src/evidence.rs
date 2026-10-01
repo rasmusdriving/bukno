@@ -230,7 +230,19 @@ impl Evidence {
     fn finish(&mut self, ctx: &egui::Context, report: serde_json::Value) {
         self.done = true;
         write(&self.dir, "metrics.json", &report);
-        ctx.send_viewport_cmd(ViewportCommand::Close);
+        // BUKNO_LINGER_SECS keeps the window open and idle afterwards, so
+        // memory can be sampled once the workload has stopped.
+        let linger = std::env::var("BUKNO_LINGER_SECS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        if linger > 0.0 {
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs_f64(linger));
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+                ctx.request_repaint();
+            });
+        } else {
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+        }
     }
 
     fn save_png(&self, image: &egui::ColorImage) {

@@ -131,5 +131,5 @@ pub fn is_shown(ui: &Ui) -> bool {
 
 pub fn format_elapsed(seconds: f64) -> String {
     let s = seconds.max(0.0) as u64;
-    if s < 60 { format!("{s}s") } else { format!("{}m {:02}s", s / 60, s % 60) }
+    if s < 60 { format!("{s}s") } else { format!("{}m {}s", s / 60, s % 60) }
 }

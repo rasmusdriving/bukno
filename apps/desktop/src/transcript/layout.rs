@@ -16,7 +16,8 @@ use crate::theme::Theme;
 
 /// Space above the first message and below the last.
 pub fn top_padding(theme: &Theme) -> f32 {
-    theme.space.space_8
+    // Chat header to first message is space-8; the header already takes 8.
+    theme.space.space_8 - 8.0
 }
 pub fn bottom_padding(theme: &Theme) -> f32 {
     theme.space.space_6
@@ -55,6 +56,19 @@ impl BlockLayout {
     }
 }
 
+/// Most laid-out blocks kept in memory. Galleys hold glyphs and meshes, so
+/// keeping every block of a long chat costs far more than the 20 MiB budget.
+const MAX_CACHED_LAYOUTS: usize = 400;
+/// Blocks on either side of the viewport that are never dropped.
+const KEEP_AROUND: usize = 60;
+
+#[derive(Clone, Copy)]
+struct Measured {
+    revision: u64,
+    wrap_key: u32,
+    height: f32,
+}
+
 #[derive(Default)]
 pub struct Layout {
     width: f32,
@@ -64,6 +78,9 @@ pub struct Layout {
     tops: Vec<f32>,
     tops_dirty: bool,
     cache: HashMap<BlockId, BlockLayout>,
+    /// Heights of blocks laid out before, kept after their galleys are
+    /// dropped so returning to them never changes the scroll geometry.
+    measured: HashMap<BlockId, Measured>,
     seen_revision: u64,
     pub laid_out_this_frame: usize,
     /// Space after the last block, such as for the working indicator.
@@ -92,11 +109,12 @@ impl Layout {
         self.seen_revision = doc.revision;
         self.heights.clear();
         self.heights.reserve(doc.blocks.len());
+        let wrap_key = (width * 2.0).round() as u32;
         for (i, block) in doc.blocks.iter().enumerate() {
-            let height = match self.cache.get(&block.id) {
-                Some(cached) if cached.revision == block.revision && !width_changed => cached.height,
-                // A stale cached height is a better estimate than a guess.
-                Some(cached) => cached.height.max(estimate(doc, i, theme, width)),
+            let height = match self.measured.get(&block.id) {
+                Some(m) if m.revision == block.revision && m.wrap_key == wrap_key => m.height,
+                // A stale measurement is a better estimate than a guess.
+                Some(m) => m.height.max(estimate(doc, i, theme, width)),
                 None => estimate(doc, i, theme, width),
             };
             self.heights.push(height);
@@ -173,14 +191,21 @@ impl Layout {
             self.heights[index] = laid.height;
             self.tops_dirty = true;
         }
+        self.measured.insert(block.id, Measured { revision: block.revision, wrap_key, height: laid.height });
         self.cache.insert(block.id, laid);
         changed
     }
 
-    /// Drop cached layouts for blocks that no longer exist.
-    pub fn retain(&mut self, doc: &Document) {
-        if self.cache.len() > doc.blocks.len() + 64 {
-            self.cache.retain(|id, _| doc.index_of(*id).is_some());
+    /// Bound memory: drop galleys far from the viewport (`visible` is the
+    /// range of block indices in view) and anything no longer in the document.
+    pub fn trim(&mut self, doc: &Document, visible: std::ops::Range<usize>) {
+        if self.cache.len() <= MAX_CACHED_LAYOUTS {
+            return;
+        }
+        let keep = visible.start.saturating_sub(KEEP_AROUND)..visible.end + KEEP_AROUND;
+        self.cache.retain(|id, _| doc.index_of(*id).is_some_and(|i| keep.contains(&i)));
+        if self.measured.len() > doc.blocks.len() + 256 {
+            self.measured.retain(|id, _| doc.index_of(*id).is_some());
         }
     }
 

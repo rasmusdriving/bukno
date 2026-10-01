@@ -62,6 +62,8 @@ pub struct TranscriptView {
     preferred_x: Option<f32>,
     code_scroll: HashMap<BlockId, f32>,
     viewport_height: f32,
+    last_rect: Rect,
+    last_column: Rect,
     pub stats: FrameStats,
     /// Last text this widget copied, kept for UI checks.
     pub last_copied: Option<String>,
@@ -82,6 +84,8 @@ impl Default for TranscriptView {
             preferred_x: None,
             code_scroll: HashMap::new(),
             viewport_height: 0.0,
+            last_rect: Rect::NOTHING,
+            last_column: Rect::NOTHING,
             stats: FrameStats::default(),
             last_copied: None,
         }
@@ -113,6 +117,24 @@ impl TranscriptView {
         self.follow = false;
     }
 
+    /// The transcript's viewport as of the last frame.
+    pub fn viewport(&self) -> Rect {
+        self.last_rect
+    }
+
+    /// Where a document position is on screen, if its block is laid out.
+    /// Used by UI checks to point at text the way a person would.
+    pub fn screen_pos(&mut self, doc: &Document, theme: &Theme, pos: TextPos) -> Option<Pos2> {
+        let (index, offset) = resolve(doc, pos)?;
+        let top = self.layout.top(theme, index);
+        let laid = self.layout.cached(doc.blocks[index].id)?;
+        let scroll = self.code_scroll.get(&doc.blocks[index].id).copied().unwrap_or(0.0);
+        let origin =
+            pos2(self.last_column.left(), self.last_rect.top() - self.offset + top) + laid.text_pos - vec2(scroll, 0.0);
+        let caret = laid.galley.pos_from_cursor(CCursor::new(offset));
+        Some(origin + caret.center().to_vec2())
+    }
+
     pub fn scroll_to_end(&mut self) {
         self.follow = true;
         self.unseen_output = false;
@@ -127,8 +149,9 @@ impl TranscriptView {
         let column = column_rect(rect, theme);
         let ctx = ui.ctx().clone();
         self.viewport_height = rect.height();
+        self.last_rect = rect;
+        self.last_column = column;
         self.layout.sync(doc, theme, column.width(), ctx.pixels_per_point());
-        self.layout.retain(doc);
         if let Some(sel) = self.selection
             && sel.ordered(doc).is_none()
         {
@@ -194,6 +217,7 @@ impl TranscriptView {
                 self.layout.ensure(fonts, doc, theme, i);
             }
         });
+        self.layout.trim(doc, visible.clone());
         self.stats = FrameStats {
             visible_blocks: visible.len(),
             laid_out: self.layout.laid_out_this_frame,
@@ -213,6 +237,11 @@ impl TranscriptView {
             accessibility::publish(ui, id, doc, &self.layout, &positions, self.selection, &self.code_scroll);
         }
 
+        if self.offset > 0.5 {
+            // Content scrolling under the chat header fades out instead of being cut.
+            let fade = Rect::from_min_size(rect.min, vec2(rect.width(), 20.0));
+            theme.paint_fade(&painter, fade, theme.color.surface_canvas, true);
+        }
         self.paint_scrollbar(ui, theme, rect);
         if self.unseen_output {
             let button = Rect::from_center_size(pos2(column.center().x, rect.bottom() - 28.0), vec2(124.0, 32.0));

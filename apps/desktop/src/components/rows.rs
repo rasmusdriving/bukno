@@ -168,7 +168,7 @@ pub fn usage_meter(ui: &Ui, theme: &Theme, rect: Rect, provider: Provider, windo
                 theme.font(&theme.text.t_caption),
                 c.text_secondary,
             );
-            let track = Rect::from_min_size(pos2(rect.left(), rect.top() + 21.0), vec2(rect.width(), 3.0));
+            let track = Rect::from_min_size(pos2(rect.left(), rect.top() + 22.0), vec2(rect.width(), 3.0));
             painter.rect_filled(track, 2.0, c.surface_raised);
             let mut fill = track;
             fill.set_width(track.width() * (left / 100.0).clamp(0.0, 1.0));

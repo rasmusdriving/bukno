@@ -72,7 +72,7 @@ pub fn sidebar(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
     y += row_h + theme.space.space_6 - 8.0;
 
     rows::section_label(ui, &theme, Rect::from_min_size(pos2(left, y), vec2(width, 28.0)), "Projects");
-    y += 28.0 + 2.0;
+    y += 27.0;
     let projects = [("Bukno", 0usize), ("Fieldnotes", 1), ("Studio", 2)];
     for (name, i) in projects {
         let id = Id::new(("nav-project", i));
@@ -115,9 +115,9 @@ pub fn sidebar(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
             }
         }
     }
-    y += theme.space.space_6 - 8.0;
+    y += theme.space.space_6 - 10.0;
     rows::section_label(ui, &theme, Rect::from_min_size(pos2(left, y), vec2(width, 28.0)), "Chats");
-    y += 28.0 + 2.0;
+    y += 27.0;
     for (j, (title, provider)) in
         [("A quick idea", Provider::Claude), ("Packing list for Lisbon", Provider::Codex)].into_iter().enumerate()
     {
@@ -147,7 +147,7 @@ pub fn sidebar(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
     let meters_left = rect.left() + 20.0;
     let meters_w = rect.width() - 40.0;
     for (k, provider) in [Provider::Codex, Provider::Claude].into_iter().enumerate() {
-        let top = profile.top() - 16.0 - (2 - k) as f32 * 35.0;
+        let top = profile.top() - 7.0 - (2 - k) as f32 * 35.0;
         rows::usage_meter(
             ui,
             &theme,
