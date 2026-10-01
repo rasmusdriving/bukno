@@ -20,7 +20,8 @@ pub fn titlebar(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect, sidebar_shown: bo
     let c = &theme.color;
     let height = theme.size.size_titlebar;
     let bar = Rect::from_min_size(canvas.min, vec2(canvas.width(), height));
-    let drag = ui.interact(bar, Id::new("titlebar"), Sense::click_and_drag());
+    // Not focusable: dragging the window has no keyboard equivalent here.
+    let drag = ui.interact(bar, Id::new("titlebar"), Sense::CLICK | Sense::DRAG);
     if drag.drag_started() {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }

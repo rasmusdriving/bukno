@@ -632,6 +632,11 @@ fn shell_keyboard_navigation() {
         }
     }
     assert!(order.iter().any(|l| l == "New chat"));
+    assert!(
+        !order.iter().any(|l| l == "Unknown" || l == "(unlabeled)" || l == "MultilineTextInput"),
+        "every focus stop has a name: {order:?}"
+    );
+    assert!(order.iter().any(|l| l == "Follow up with Codex"), "the composer is named by its recipient");
     assert!(order.iter().any(|l| l.contains("Polish the composer")));
     assert!(order.iter().any(|l| l.contains("Conversation") || l == "Document"));
     // Cmd+N opens a new chat with the composer focused.

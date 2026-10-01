@@ -1,6 +1,6 @@
 # Bukno
 
-A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Planning stage, no application implementation yet.
+A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 0 foundation built: the Mac shell, theme and transcript widget run with synthetic data only. No engine is connected yet.
 
 ## Agreed architecture
 
@@ -17,6 +17,20 @@ A lightweight, open-source native interface for Codex and Claude Code. Pronounce
 - Bukno works with any installed engine version and offers a one-click switch back to the last working version if an update breaks it.
 - Dark interface with blue Codex and orange Claude accents, simple text navigation with provider logos, a model/effort/fast-mode control, interactive delegated chats, animated working states, compact change totals, and cached usage beside the profile. Ordinary chat formatting stays inline; previews open in the user's browser. No embedded browser or diff viewer is required for version one.
 - Interface feel is a first-release requirement: warm grey surfaces, clear typography, restrained shadows, and responsive controls. Keep the compact lightning/model/effort control free of a provider logo, move the composer and profile close to the bottom edge, and avoid ornamental borders or an embedded preview panel.
+
+## Building
+
+```bash
+sh scripts/bootstrap.sh          # puts compiler output on the internal drive
+cargo xtask doctor               # reports tools and locations
+cargo xtask dev --scenario long-chat
+cargo xtask check                # format, lint, Mac build, Windows compile check
+cargo xtask e2e --provider synthetic --scenario pass0-ui
+cargo xtask package --platform macos
+```
+
+Every launch is the labeled synthetic scenario mode until Pass 1. See the
+[Pass 0 toolkit decision](docs/toolkit-decision.md) for what was verified.
 
 ## Project documents
 

@@ -151,6 +151,8 @@ pub fn show(
     if edit.changed() {
         state.revision += 1;
     }
+    // The placeholder names the recipient; screen readers get the same name.
+    ui.ctx().accesskit_node_builder(id, |node| node.set_label(props.placeholder));
 
     // Toolbar.
     let bar = Rect::from_min_max(

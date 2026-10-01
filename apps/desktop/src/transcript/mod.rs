@@ -770,7 +770,8 @@ impl TranscriptView {
             pos2(track.left(), track.top() + (track.height() - thumb_h) * t),
             vec2(track.width(), thumb_h),
         );
-        let response = ui.interact(track, transcript_id().with("scrollbar"), Sense::drag());
+        // Keyboard users scroll with Page Up and Page Down on the transcript itself.
+        let response = ui.interact(track, transcript_id().with("scrollbar"), Sense::DRAG);
         if response.dragged() {
             let dy = response.drag_delta().y;
             self.offset = (self.offset + dy / (track.height() - thumb_h).max(1.0) * max_offset).clamp(0.0, max_offset);

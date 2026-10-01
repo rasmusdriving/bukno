@@ -14,6 +14,18 @@ use crate::theme::Theme;
 
 /// Frame-rate cap for the orb. Section 13 starts at 20 frames a second.
 pub const ORB_FPS: f32 = 20.0;
+
+/// The cap in use. `BUKNO_ORB_FPS` overrides it for measuring lower rates.
+pub fn orb_fps() -> f32 {
+    static FPS: OnceLock<f32> = OnceLock::new();
+    *FPS.get_or_init(|| {
+        std::env::var("BUKNO_ORB_FPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|f| (1.0..=60.0).contains(f))
+            .unwrap_or(ORB_FPS)
+    })
+}
 const TURN_SECONDS: f32 = 20.0;
 const DOTS: usize = 72;
 
@@ -117,7 +129,7 @@ pub fn working_indicator(ui: &mut Ui, theme: &Theme, rect: Rect, w: &Working<'_>
     // Add it back so the cap holds.
     let predicted = Duration::from_secs_f32(ui.input(|i| i.predicted_dt).clamp(0.0, 0.1));
     if animate {
-        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.0 / ORB_FPS) + predicted);
+        ui.ctx().request_repaint_after(Duration::from_secs_f32(1.0 / orb_fps()) + predicted);
     } else if w.elapsed.is_some() && w.state == OrbState::Thinking {
         // The still variant only needs the clock to tick.
         ui.ctx().request_repaint_after(Duration::from_secs(1) + predicted);
