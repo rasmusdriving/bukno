@@ -473,6 +473,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_kittest",
+ "image",
  "libc",
  "png",
  "pulldown-cmark",
