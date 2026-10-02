@@ -44,6 +44,9 @@ pub struct Machine {
     /// The live engine connection, set by `Connected` and cleared by
     /// `ConnectionLost`. Nothing is written to an engine without one.
     connection: Option<u64>,
+    /// The newest generation ever connected, kept while disconnected.
+    /// Generations only increase, so a `Connected` at or below it is late.
+    newest: Option<u64>,
     runs: HashMap<RunId, Run>,
     active_run: HashMap<TaskId, RunId>,
     deliveries: HashMap<MessageId, Delivery>,
@@ -176,13 +179,16 @@ impl Machine {
         let generation = event.connection_generation;
         match event.kind {
             EngineEventKind::Connected => {
-                match self.connection {
-                    Some(current) if current == generation => return,
-                    // A replacement connection means the old one is gone.
-                    Some(current) => self.lose_connection(current, fx),
-                    None => {}
+                // A repeat, or a late notice from a replaced or lost connection.
+                if self.newest.is_some_and(|newest| generation <= newest) {
+                    return;
+                }
+                // A newer connection means the old one is gone.
+                if let Some(current) = self.connection {
+                    self.lose_connection(current, fx);
                 }
                 self.connection = Some(generation);
+                self.newest = Some(generation);
                 let waiting: Vec<MessageId> = self
                     .deliveries
                     .iter()

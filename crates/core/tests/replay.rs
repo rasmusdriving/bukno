@@ -12,6 +12,9 @@
 //! C4 A loss reported for a connection that is not live settles runs on the
 //!    live connection.
 //! C5 A message recorded while disconnected is written twice, or never.
+//! C6 A late `Connected` from an older connection, or a repeated one after
+//!    its connection was lost, replaces the live connection or revives a
+//!    dead one (PR 1, second review).
 
 use bukno_core::event::{
     Command, Effect, EngineEvent, EngineEventKind, EngineRequest, Input, RejectReason, StorageResult, ViewUpdate,
@@ -145,4 +148,44 @@ fn only_the_live_connection_can_be_lost() {
         Some(RunState::OutcomeUnknown),
         "replacing a connection means the old one is gone"
     );
+}
+
+/// C6: generations only increase. A late or repeated `Connected` from an
+/// older generation changes nothing, before or after a loss.
+#[test]
+fn late_connected_notices_are_ignored() {
+    let mut m = Machine::new();
+    replay(
+        &mut m,
+        vec![
+            engine(2, EngineEventKind::Connected),
+            submit(1),
+            recorded(1),
+            engine(2, EngineEventKind::RunAccepted { run: RunId(1) }),
+        ],
+    );
+    // Out of order: generation 1's notice arrives after generation 2 is live.
+    let late = replay(&mut m, vec![engine(1, EngineEventKind::Connected)]);
+    assert!(late.is_empty(), "a late Connected changes nothing: {late:?}");
+    assert_eq!(m.run_state(RunId(1)), Some(RunState::Running));
+    let delta = replay(
+        &mut m,
+        vec![engine(2, EngineEventKind::TextDelta { run: RunId(1), item: ItemId(40), delta: "still live".into() })],
+    );
+    assert!(!delta.is_empty(), "generation 2 is still the live connection");
+
+    // After generation 2 is lost, neither it nor an older one can come back.
+    replay(&mut m, vec![engine(2, EngineEventKind::ConnectionLost)]);
+    assert_eq!(m.run_state(RunId(1)), Some(RunState::OutcomeUnknown));
+    let next = replay(&mut m, vec![submit(2), recorded(2)]);
+    assert_eq!(writes(&next), 0, "no live connection after the loss");
+    let revived = replay(&mut m, vec![engine(2, EngineEventKind::Connected), engine(1, EngineEventKind::Connected)]);
+    assert!(revived.is_empty(), "a dead connection is not revived: {revived:?}");
+    let ignored = replay(&mut m, vec![engine(2, EngineEventKind::RunAccepted { run: RunId(2) })]);
+    assert!(ignored.is_empty(), "events from the dead connection stay ignored");
+
+    // Only a newer generation is accepted, and it writes the waiting turn once.
+    let fresh = replay(&mut m, vec![engine(3, EngineEventKind::Connected)]);
+    assert_eq!(writes(&fresh), 1);
+    assert_eq!(m.run_state(RunId(2)), Some(RunState::Starting));
 }
