@@ -22,7 +22,7 @@ the app-server protocol directly. Raw logs:
 | Observation | Consequence for Bukno |
 |---|---|
 | `codex` on PATH is an npm JavaScript wrapper that starts a native binary in `node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex` | Launch the native binary directly, so no Node process sits between Bukno and the engine |
-| The user's `~/.codex/config.toml` sets `model = "gpt-6.1-sol"`, which fails every turn with "not supported when using Codex with a ChatGPT account" | Never rely on the config's model. Pick from `model/list` (its `isDefault` entry) and show the rejection in words if a turn still fails on the model |
+| The user's `~/.codex/config.toml` sets `model = "gpt-6.1-sol"`. Through Bukno's app-server it fails every turn with "not supported when using Codex with a ChatGPT account" and is missing from `model/list`, yet it works in the Codex app and the Codex CLI. Cause not known yet (open question below) | For now Bukno uses the config model only when `model/list` offers it, otherwise the list's default, and says so |
 | The same config sets `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` | Always send Bukno's preset (sandbox and approval policy) on `thread/start`, `thread/resume` and `turn/start`. Never inherit the config's policy silently |
 | Configured MCP servers start with every thread and run outside the Codex sandbox | No preset may be labeled read only while MCP tools are loaded |
 | `workspace-write` with `untrusted` asks before each shell command; `decline` keeps the turn going and only the allowed command runs | Proven presets and the decision card's Allow and Decline |
@@ -33,6 +33,10 @@ the app-server protocol directly. Raw logs:
 | `turn/start` accepts `clientUserMessageId`, which comes back as the `clientId` of the user message item | Reconciliation key: Bukno sends its message ID, so after a crash it can tell whether a message reached the engine |
 | `turn/steer` without an active turn fails with "no active turn to steer"; an unknown thread fails with "thread not found" | Typed errors, shown in words |
 | `/usr/bin/git` exits 69 because the Xcode license is not accepted | Prefer a real Git (Homebrew, Command Line Tools). If none works, treat the folder as non-Git and say why |
+
+## Open questions
+
+- Why is `gpt-6.1-sol` refused through Bukno but accepted by the Codex app and CLI on the same account? Things to compare: the client name Bukno sends in `initialize` (`bukno`, which Codex records as the originator), the `experimentalApi` capability, the engine version (the desktop app bundles 0.159.2, the CLI is 0.158.0), and whether the CLI applies the config model through a profile or override that `model/list` does not show. To debug later.
 
 ## Failure rows
 
