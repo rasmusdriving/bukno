@@ -28,6 +28,7 @@ libc = "0.2"
 serde_json.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 

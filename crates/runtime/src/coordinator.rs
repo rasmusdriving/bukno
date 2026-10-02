@@ -32,6 +32,8 @@ use crate::workspace;
 pub const TEXT_BATCH: Duration = Duration::from_millis(50);
 /// Streaming text is written to storage in batches this far apart, not per token.
 const ITEM_BATCH: Duration = Duration::from_millis(500);
+/// Overrides the reasoning effort for development and end-to-end runs.
+pub const EFFORT_ENV: &str = "BUKNO_CODEX_EFFORT";
 /// Bound on queued engine and storage results.
 const INBOX_CAPACITY: usize = 1_024;
 
@@ -392,7 +394,10 @@ impl Real {
         let preset = presets::find(
             &preset.or_else(|| self.config.codex_preset.clone()).unwrap_or_else(|| presets::DEFAULT.id.to_owned()),
         );
-        RunSettings { preset: preset.id.to_owned(), writes: preset.writes, model: None, effort: None }
+        // Development and end-to-end runs can ask for a lighter effort; the
+        // model control that sets this for real lands in Pass 3.
+        let effort = std::env::var(EFFORT_ENV).ok().filter(|e| !e.is_empty());
+        RunSettings { preset: preset.id.to_owned(), writes: preset.writes, model: None, effort }
     }
 
     async fn on_command(&mut self, command: UiCommand) {

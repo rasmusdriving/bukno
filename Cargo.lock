@@ -488,6 +488,7 @@ dependencies = [
  "png",
  "pulldown-cmark",
  "rfd",
+ "rusqlite",
  "serde_json",
 ]
 

@@ -212,8 +212,14 @@ fn package(args: &[String]) -> Result<PathBuf> {
 fn e2e(args: &[String]) -> Result {
     let provider = option(args, "--provider").unwrap_or("synthetic");
     let scenario = option(args, "--scenario").unwrap_or("pass0-ui");
+    if (provider, scenario) == ("codex", "pass1") {
+        return e2e_codex_pass1();
+    }
     if provider != "synthetic" || scenario != "pass0-ui" {
-        return Err("Pass 0 has one end-to-end scenario: --provider synthetic --scenario pass0-ui".into());
+        return Err(
+            "End-to-end scenarios: --provider synthetic --scenario pass0-ui, or --provider codex --scenario pass1"
+                .into(),
+        );
     }
     let dir = evidence_dir(provider, scenario);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -254,6 +260,40 @@ fn e2e(args: &[String]) -> Result {
 }
 
 /// Launch the packaged app with an autopilot, sample its memory, collect metrics.
+/// The Pass 1 Codex flow through the real app with the installed engine and
+/// the existing Codex login. Spends a little real usage; never runs in CI.
+fn e2e_codex_pass1() -> Result {
+    let dir = evidence_dir("codex", "pass1");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    manifest(&dir, "pass1")?;
+    let codex = output("codex", &["--version"]);
+    write_json(&dir.join("engine.json"), &json!({ "codex_version_on_path": codex }))?;
+    std::fs::write(
+        dir.join("procedure.md"),
+        "# Pass 1 Codex flow\n\n\
+         Driven by `apps/desktop/tests/codex_live.rs` through the real app UI (egui_kittest), with the real\n\
+         coordinator, SQLite store and installed Codex app-server, using the existing Codex login. Reasoning\n\
+         effort is set to low through BUKNO_CODEX_EFFORT to keep usage small.\n\n\
+         1. Create a Git fixture named with spaces and Swedish letters, with an unrelated uncommitted edit.\n\
+         2. Launch, add the fixture as a project, send a task that writes hello.txt and runs two commands.\n\
+         3. Deny `touch declined.txt`, allow `touch allowed.txt`; check the files and the dirty file's hash.\n\
+         4. Stop a long reply. Kill the engine during another reply; check the unknown outcome is explained.\n\
+         5. Type a draft, start a projectless chat that writes notes.md, quit and check no engine is left.\n\
+         6. Relaunch: the draft is back; both chats resume and answer from their earlier context.\n\n\
+         Not covered here: Finder launch (checked by hand with the packaged app), VoiceOver, real IME.\n",
+    )
+    .map_err(|e| e.to_string())?;
+    let status = cargo()
+        .args(["test", "-p", "bukno-desktop", "--test", "codex_live", "--", "--nocapture", "--test-threads=1"])
+        .env("BUKNO_E2E_LIVE", "1")
+        .env("BUKNO_CODEX_EFFORT", "low")
+        .env("BUKNO_EVIDENCE_DIR", &dir)
+        .status()
+        .map_err(|e| e.to_string())?;
+    println!("e2e evidence: {}", dir.display());
+    if status.success() { Ok(()) } else { Err("the Codex pass1 flow failed; see result.json".into()) }
+}
+
 fn bench(args: &[String]) -> Result {
     let workload = option(args, "--workload").unwrap_or("idle");
     let samples: usize = option(args, "--samples").and_then(|s| s.parse().ok()).unwrap_or(3);

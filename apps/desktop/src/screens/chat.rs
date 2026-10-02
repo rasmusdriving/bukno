@@ -348,7 +348,8 @@ fn new_chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
     painter.galley(pos2(column.left() + 34.0, meta_y - name_galley.size().y / 2.0), name_galley, c.text_secondary);
     match &project {
         Some(p) => {
-            let mut job = theme.job(p.path.clone(), &theme.text.t_small, c.text_tertiary, column.width() - name_w - 80.0);
+            let mut job =
+                theme.job(p.path.clone(), &theme.text.t_small, c.text_tertiary, column.width() - name_w - 80.0);
             job.wrap.max_rows = 1;
             job.wrap.overflow_character = Some('…');
             let galley = painter.layout_job(job);

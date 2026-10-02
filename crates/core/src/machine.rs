@@ -739,7 +739,7 @@ impl Machine {
                 }
                 // A newer connection means the old one is gone.
                 if let Some(current) = self.connections.get(&provider).copied() {
-                    self.lose_connection(provider, current, "The engine was replaced.", fx);
+                    self.lose_connection(provider, current, "Codex was restarted", fx);
                 }
                 self.connections.insert(provider, generation);
                 self.newest.insert(provider, generation);
@@ -1221,7 +1221,7 @@ impl Machine {
                 for provider in providers {
                     fx.push(Effect::Engine(provider, EngineRequest::Kill));
                     if let Some(generation) = self.connections.remove(&provider) {
-                        self.lose_connection(provider, generation, "Bukno quit before the engine stopped.", fx);
+                        self.lose_connection(provider, generation, "Bukno quit before Codex confirmed it stopped", fx);
                     }
                 }
                 self.quit_ready(fx);
@@ -1411,7 +1411,7 @@ impl Machine {
                 task,
                 run,
                 body,
-                explanation: format!("The connection to Codex was lost ({reason}). Checking what it finished…"),
+                explanation: format!("{reason}. Checking what it finished…"),
             }));
         }
     }

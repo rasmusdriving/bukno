@@ -547,14 +547,22 @@ impl Supervisor {
             Ok(Ok(status)) => describe_exit(status),
             _ => "it stopped responding".into(),
         };
+        // The engine's own log goes to diagnostics, never into the chat: it is
+        // terminal output, and can hold paths and colour codes.
         let tail = conn.stderr_tail();
-        let detail = if tail.is_empty() { exit } else { format!("{exit}: {tail}") };
+        if !tail.is_empty() {
+            eprintln!("codex stderr before exit: {}", tail.chars().filter(|c| !c.is_control()).collect::<String>());
+        }
+        let detail = exit;
         // Tool children left behind by the engine are ended with it.
         let _ = process::signal_group(conn.pid, Signal::Kill);
         if conn.ready {
             (self.status)(Status::Exited { generation: conn.generation, pid: conn.pid, reason: detail.clone() });
-            self.emit(conn.generation, EngineEventKind::ConnectionLost { reason: format!("Codex exited, {detail}") })
-                .await;
+            self.emit(
+                conn.generation,
+                EngineEventKind::ConnectionLost { reason: format!("Codex stopped unexpectedly ({detail})") },
+            )
+            .await;
         } else {
             let reason = format!("Codex {} exited during startup, {detail}", conn.version);
             (self.status)(Status::Exited { generation: conn.generation, pid: conn.pid, reason: detail });
@@ -646,7 +654,9 @@ impl Supervisor {
                         };
                         let model = str_at(&value, "model").map(|m| {
                             let name = conn.models.iter().find(|x| x.id == m).map_or(m, |x| x.display_name.as_str());
-                            match str_at(&value, "reasoningEffort") {
+                            // The turn's own effort, when it sets one, is what the run uses.
+                            let turn_effort = ctx.settings.effort.as_deref();
+                            match turn_effort.or_else(|| str_at(&value, "reasoningEffort")) {
                                 Some(effort) => format!("{name} · {}", capitalize(effort)),
                                 None => name.to_owned(),
                             }
