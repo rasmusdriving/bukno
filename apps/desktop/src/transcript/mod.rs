@@ -144,6 +144,9 @@ impl TranscriptView {
         self.layout.trailing = if trailing > 0.0 { trailing + theme.space.space_6 } else { 0.0 };
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
+        // Buttons on blocks scrolled under the chat header are neither drawn
+        // nor clickable there.
+        ui.shrink_clip_rect(rect);
         let id = transcript_id();
         let response = ui.interact(rect, id, Sense::click_and_drag());
         let column = column_rect(rect, theme);
