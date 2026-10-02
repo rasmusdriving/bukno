@@ -49,6 +49,8 @@ pub struct ComposerProps<'a> {
     /// 1 to 5 on the provider's effort ramp.
     pub effort_level: u8,
     pub permission: &'a str,
+    /// The permission label opens the preset menu.
+    pub permission_menu: bool,
     /// Why Send is unavailable right now, shown beside the composer. The
     /// draft is never cleared while this is set.
     pub send_blocked: Option<&'a str>,
@@ -58,6 +60,8 @@ pub struct ComposerProps<'a> {
 pub enum ComposerAction {
     Send,
     Stop,
+    /// The permission control was clicked.
+    Permission,
 }
 
 /// The composer's height for its current text, never more than
@@ -187,13 +191,41 @@ pub fn show(
     ui.add_enabled_ui(false, |ui| {
         icon_button(ui, theme, id.with("add"), add, Icon::Plus, "Add files, available in a later pass");
     });
-    ui.painter().text(
-        pos2(add.right() + 8.0, bar.center().y),
-        Align2::LEFT_CENTER,
-        props.permission,
-        theme.font(&theme.text.t_ui),
-        c.text_secondary,
-    );
+    if props.permission_menu {
+        let galley =
+            ui.painter().layout_no_wrap(props.permission.to_owned(), theme.font(&theme.text.t_ui), c.text_secondary);
+        let control = Rect::from_min_size(pos2(add.right() + 2.0, bar.top()), vec2(galley.size().x + 34.0, 32.0));
+        let response = ui.interact(control, id.with("permission"), Sense::click());
+        let label = format!("Permissions: {}", props.permission);
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &label));
+        if response.hovered() {
+            ui.painter().rect_filled(control, theme.radius.radius_md, c.surface_hover);
+        }
+        ui.painter().galley(
+            pos2(control.left() + 6.0, bar.center().y - galley.size().y / 2.0),
+            galley,
+            c.text_secondary,
+        );
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(control.right() - 14.0, bar.center().y), vec2(14.0, 14.0)),
+            Icon::ChevronDown,
+            12.0,
+            c.text_tertiary,
+        );
+        focus_ring(ui, theme, &response, theme.radius.radius_md);
+        if response.clicked() {
+            action = Some(ComposerAction::Permission);
+        }
+    } else {
+        ui.painter().text(
+            pos2(add.right() + 8.0, bar.center().y),
+            Align2::LEFT_CENTER,
+            props.permission,
+            theme.font(&theme.text.t_ui),
+            c.text_secondary,
+        );
+    }
 
     let primary = Rect::from_min_size(pos2(bar.right() - 32.0, bar.top()), vec2(32.0, 32.0));
     let has_text = !state.text.trim().is_empty();

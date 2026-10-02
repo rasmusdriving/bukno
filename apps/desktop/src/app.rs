@@ -1,14 +1,17 @@
 //! UI state and the connection to the coordinator.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 
-use bukno_core::event::ViewUpdate;
-use bukno_core::ids::RunId;
-use bukno_core::message::Provider;
+use bukno_core::decision::{DecisionAnswer, DecisionView};
+use bukno_core::event::{ChatSummary, NoticeTone, ProjectView, RejectReason, ViewUpdate, WaitReason};
+use bukno_core::ids::{ProjectId, RunId, TaskId};
+use bukno_core::message::{DeliveryState, ItemKind, Provider};
 use bukno_core::run::RunState;
 use bukno_platform::paths::AppPaths;
+use bukno_runtime::engines::EngineView;
 use bukno_runtime::synthetic::{self, Scenario};
-use bukno_runtime::{Coordinator, UiCommand, UiEvent};
+use bukno_runtime::{Coordinator, EngineAction, SetupView, UiCommand, UiEvent};
 use egui::{Key, KeyboardShortcut, Modifiers, Ui};
 
 use crate::components::composer::{ComposerState, composer_id};
@@ -17,6 +20,9 @@ use crate::theme::Theme;
 use crate::transcript::TranscriptView;
 use crate::transcript::document::Document;
 use crate::{navigation, screens};
+
+/// Draft autosave debounce (specification section 8).
+const DRAFT_DEBOUNCE: f64 = 0.25;
 
 /// Where commands go: the real coordinator, or a recorder in UI checks.
 pub enum Backend {
@@ -35,9 +41,20 @@ impl Backend {
     }
 }
 
+/// What the window is showing data from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Generated chats and a fake engine; nothing is saved.
+    Synthetic,
+    /// The user's chats and the installed engines.
+    Real,
+    /// Bukno cannot run, for example because another copy holds the state folder.
+    Blocked { title: String, detail: String },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
-    /// The scenario's chat.
+    /// The selected chat.
     Chat,
     /// A new, empty chat waiting for its first message.
     NewChat,
@@ -56,34 +73,122 @@ pub struct ActiveRun {
     pub has_output: bool,
 }
 
+/// A run whose outcome is unknown, with the coordinator's explanation.
+#[derive(Clone, Debug)]
+pub struct UnknownView {
+    pub run: RunId,
+    pub body: String,
+    pub explanation: String,
+}
+
+/// The selected chat's state besides the composer, run and notice.
+#[derive(Default)]
+pub struct ChatExtra {
+    pub wait: Option<(RunId, WaitReason)>,
+    pub decisions: Vec<DecisionView>,
+    pub unknown: Option<UnknownView>,
+    /// Model and effort the engine reported for this chat.
+    pub model: Option<String>,
+    pub activity: Option<String>,
+    pub stop_slow: Option<Vec<String>>,
+    pub notice_problem: bool,
+    /// Last draft revision handed to storage, and the last one it confirmed.
+    pub draft_sent: u64,
+    pub draft_saved: u64,
+    pub draft_error: Option<String>,
+    pub last_edit: Option<(u64, f64)>,
+    /// Free-text answers being typed into question cards, by question ID.
+    pub answers: HashMap<String, String>,
+    /// The last message the engine refused, so it can go back in the composer.
+    pub rejected_body: Option<String>,
+}
+
+/// A chat's state while another chat is shown.
+#[derive(Default)]
+pub struct ChatState {
+    pub composer: ComposerState,
+    pub run: Option<ActiveRun>,
+    pub pending_submit: Option<PendingSubmit>,
+    pub notice: Option<String>,
+    pub extra: ChatExtra,
+}
+
 pub struct BuknoApp {
     pub theme: Theme,
+    pub mode: Mode,
     pub scenario: Scenario,
     pub paths: AppPaths,
     backend: Backend,
     events: Receiver<UiEvent>,
     pub doc: Document,
     pub transcript: TranscriptView,
+    // The selected chat.
+    pub selected: Option<TaskId>,
     pub composer: ComposerState,
     pub run: Option<ActiveRun>,
     pub pending_submit: Option<PendingSubmit>,
+    pub notice: Option<String>,
+    pub extra: ChatExtra,
+    /// Every other chat's state.
+    pub stash: HashMap<TaskId, ChatState>,
     pub view: View,
+    /// The project a new chat starts in; None is a projectless chat.
+    pub new_chat_project: Option<ProjectId>,
+    pub chats: Vec<ChatSummary>,
+    pub projects: Vec<ProjectView>,
+    pub engine: Option<EngineView>,
+    pub setup: Option<SetupView>,
+    /// Show the setup screen over the chats (from the profile row).
+    pub show_setup: bool,
+    /// Messages that are not about one chat.
+    pub banner: Option<String>,
+    pub quit: QuitFlow,
+    pub menu: Option<Menu>,
     pub sidebar_open: bool,
     /// Where the sidebar's scrolling list was drawn last frame (for checks).
     pub sidebar_list: Option<egui::Rect>,
     pub projects_open: [bool; 3],
+    pub open_projects: HashMap<ProjectId, bool>,
     pub reduce_motion: bool,
     /// Working treatment: the approved orb, or a proposal for comparison.
     pub working_mark: crate::components::orb::Mark,
-    pub notice: Option<String>,
     pub evidence: Evidence,
     window_size: egui::Vec2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuitFlow {
+    #[default]
+    None,
+    /// Work is active; Keep working or Stop and quit.
+    Asking,
+    /// Stopping runs and closing the engine.
+    Closing,
+    Done,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Menu {
+    Permission,
+    NewChatProject,
 }
 
 impl BuknoApp {
     pub fn new(
         ctx: &egui::Context,
         theme: Theme,
+        scenario: Scenario,
+        paths: AppPaths,
+        backend: Backend,
+        events: Receiver<UiEvent>,
+    ) -> Self {
+        Self::with_mode(ctx, theme, Mode::Synthetic, scenario, paths, backend, events)
+    }
+
+    pub fn with_mode(
+        ctx: &egui::Context,
+        theme: Theme,
+        mode: Mode,
         scenario: Scenario,
         paths: AppPaths,
         backend: Backend,
@@ -96,9 +201,16 @@ impl BuknoApp {
             Some("0") => false,
             _ => bukno_platform::reduce_motion().unwrap_or(false),
         };
+        let synthetic = mode == Mode::Synthetic;
         Self {
             theme,
-            view: if scenario.messages == 0 && scenario.auto_submit.is_none() { View::NewChat } else { View::Chat },
+            view: if !synthetic || (scenario.messages == 0 && scenario.auto_submit.is_none()) {
+                View::NewChat
+            } else {
+                View::Chat
+            },
+            selected: synthetic.then_some(synthetic::TASK),
+            mode,
             scenario,
             paths,
             backend,
@@ -108,12 +220,24 @@ impl BuknoApp {
             composer: ComposerState::default(),
             run: None,
             pending_submit: None,
+            notice: None,
+            extra: ChatExtra::default(),
+            stash: HashMap::new(),
+            new_chat_project: None,
+            chats: Vec::new(),
+            projects: Vec::new(),
+            engine: None,
+            setup: None,
+            show_setup: false,
+            banner: None,
+            quit: QuitFlow::None,
+            menu: None,
             sidebar_open: true,
             sidebar_list: None,
             projects_open: [true, false, false],
+            open_projects: HashMap::new(),
             reduce_motion,
             working_mark: crate::components::orb::Mark::from_env(),
-            notice: None,
             evidence: Evidence::from_env(),
             window_size: egui::Vec2::ZERO,
         }
@@ -128,74 +252,364 @@ impl BuknoApp {
         Self::new(ctx, Theme::load(), scenario, paths, Backend::Coordinator(coordinator), rx)
     }
 
+    /// Start with the user's own state and engines.
+    pub fn real(ctx: &egui::Context, paths: AppPaths, store: bukno_storage::Store) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let repaint = ctx.clone();
+        let coordinator =
+            Coordinator::start(paths.clone(), store, tx, std::sync::Arc::new(move || repaint.request_repaint()));
+        let scenario = Scenario::named("empty").expect("empty scenario");
+        Self::with_mode(ctx, Theme::load(), Mode::Real, scenario, paths, Backend::Coordinator(coordinator), rx)
+    }
+
+    /// A window that only explains why Bukno cannot run.
+    pub fn blocked(ctx: &egui::Context, paths: AppPaths, title: String, detail: String) -> Self {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let (cmd_tx, _cmd_rx) = std::sync::mpsc::channel();
+        let scenario = Scenario::named("empty").expect("empty scenario");
+        Self::with_mode(
+            ctx,
+            Theme::load(),
+            Mode::Blocked { title, detail },
+            scenario,
+            paths,
+            Backend::Recorder(cmd_tx),
+            rx,
+        )
+    }
+
+    pub fn is_synthetic(&self) -> bool {
+        self.mode == Mode::Synthetic
+    }
+
     pub fn provider(&self) -> Provider {
-        Provider::Codex
+        self.selected_summary().map_or(Provider::Codex, |c| c.provider)
+    }
+
+    pub fn selected_summary(&self) -> Option<&ChatSummary> {
+        let task = self.selected?;
+        self.chats.iter().find(|c| c.task == task)
     }
 
     pub fn chat_title(&self) -> &str {
         match self.view {
-            View::Chat => self.scenario.title,
+            View::Chat if self.is_synthetic() => self.scenario.title,
+            View::Chat => self.selected_summary().map_or("Chat", |c| c.title.as_str()),
             View::NewChat => "New chat",
         }
     }
 
+    pub fn send_command(&self, command: UiCommand) {
+        self.backend.send(command);
+    }
+
+    // ----- Chat switching -------------------------------------------------
+
+    fn take_current(&mut self) -> ChatState {
+        ChatState {
+            composer: std::mem::take(&mut self.composer),
+            run: self.run.take(),
+            pending_submit: self.pending_submit.take(),
+            notice: self.notice.take(),
+            extra: std::mem::take(&mut self.extra),
+        }
+    }
+
+    fn put_current(&mut self, state: ChatState) {
+        self.composer = state.composer;
+        self.run = state.run;
+        self.pending_submit = state.pending_submit;
+        self.notice = state.notice;
+        self.extra = state.extra;
+    }
+
+    /// Apply `f` to a chat's state, whether it is shown or not.
+    fn with_chat(&mut self, task: TaskId, f: impl FnOnce(&mut ChatState, f64), now: f64) {
+        // Synthetic checks drive the scenario chat from the new-chat screen too.
+        if self.selected == Some(task) && (self.view == View::Chat || self.is_synthetic()) {
+            let mut state = self.take_current();
+            f(&mut state, now);
+            self.put_current(state);
+        } else {
+            f(self.stash.entry(task).or_default(), now);
+        }
+    }
+
+    /// Show `task`, keeping the previous chat's draft and state.
+    pub fn select_chat(&mut self, task: TaskId) {
+        if self.selected == Some(task) && self.view == View::Chat {
+            return;
+        }
+        self.flush_draft();
+        let current = self.take_current();
+        match (self.view, self.selected) {
+            (View::Chat, Some(previous)) => {
+                self.stash.insert(previous, current);
+            }
+            // The new-chat composer's draft is kept in memory for the next new chat.
+            _ => {
+                self.stash.insert(NEW_CHAT, current);
+            }
+        }
+        let next = self.stash.remove(&task).unwrap_or_default();
+        self.put_current(next);
+        self.selected = Some(task);
+        self.view = View::Chat;
+        self.menu = None;
+        self.doc = Document::default();
+        self.transcript = TranscriptView::default();
+        self.transcript.scroll_to_end();
+        if !self.is_synthetic() {
+            self.backend.send(UiCommand::SelectChat { task });
+        }
+    }
+
+    /// Show the new-chat screen, optionally in a project.
+    pub fn new_chat(&mut self, project: Option<ProjectId>) {
+        self.flush_draft();
+        if self.view == View::Chat {
+            let current = self.take_current();
+            if let Some(previous) = self.selected {
+                self.stash.insert(previous, current);
+            }
+            let fresh = self.stash.remove(&NEW_CHAT).unwrap_or_default();
+            self.put_current(fresh);
+        }
+        self.view = View::NewChat;
+        self.new_chat_project = project;
+        self.menu = None;
+    }
+
+    // ----- Events ---------------------------------------------------------
+
     fn apply_events(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
         while let Ok(event) = self.events.try_recv() {
             match event {
-                UiEvent::View(ViewUpdate::ConversationLoaded { task, items }) if task == synthetic::TASK => {
-                    self.doc.load(&items);
-                }
-                UiEvent::View(ViewUpdate::ItemUpserted(item)) if item.task == synthetic::TASK => {
-                    if item.kind == bukno_core::message::ItemKind::UserMessage
-                        && let Some(pending) = self.pending_submit.take()
-                    {
-                        // Accepted. Clear only the revision that was sent; anything
-                        // typed since stays.
-                        if self.composer.revision == pending.revision {
-                            self.composer.text.clear();
-                            self.composer.revision += 1;
-                        }
-                        self.view = View::Chat;
-                        self.transcript.scroll_to_end();
-                    }
-                    if matches!(item.kind, bukno_core::message::ItemKind::AgentMessage { .. })
-                        && let Some(run) = self.run.as_mut()
-                        && item.run == Some(run.run)
-                    {
-                        run.has_output = true;
-                    }
-                    self.doc.upsert(&item);
-                }
-                UiEvent::View(ViewUpdate::RunStateChanged { run, state, .. }) => {
-                    let now = ctx.input(|i| i.time);
-                    match self.run.as_mut() {
-                        Some(active) if active.run == run => active.state = state,
-                        _ => self.run = Some(ActiveRun { run, state, started: now, has_output: false }),
-                    }
-                    if state.is_terminal() {
-                        self.run = None;
+                UiEvent::View(update) => self.apply_view(update, now),
+                UiEvent::Rejected { task, reason } => {
+                    let words = rejection_words(&reason);
+                    let apply = move |chat: &mut ChatState, _: f64| {
+                        // The draft was never cleared, so it is still there to edit.
+                        chat.pending_submit = None;
+                        chat.notice = Some(words);
+                        chat.extra.notice_problem = true;
+                    };
+                    if self.view == View::NewChat && self.pending_submit.is_some() {
+                        let mut state = self.take_current();
+                        apply(&mut state, now);
+                        self.put_current(state);
+                    } else {
+                        self.with_chat(task, apply, now);
                     }
                 }
-                UiEvent::View(_) => {}
-                UiEvent::Rejected { reason, .. } => {
-                    // The draft was never cleared, so it is still there to edit.
-                    self.pending_submit = None;
-                    self.notice = Some(rejection_words(&reason));
+                UiEvent::Engine(view) => self.engine = Some(view),
+                UiEvent::Setup(view) => {
+                    // First launch: stay on setup until the user continues.
+                    if self.setup.is_none() && view.work_folder.is_none() {
+                        self.show_setup = true;
+                    }
+                    self.setup = Some(view);
+                }
+                UiEvent::Opened { task } => {
+                    // The first message created this chat: carry the composer over.
+                    let state = self.take_current();
+                    self.selected = Some(task);
+                    self.view = View::Chat;
+                    self.put_current(state);
+                    self.doc = Document::default();
+                    self.transcript = TranscriptView::default();
+                }
+                UiEvent::Notice(text) => self.banner = Some(text),
+                UiEvent::QuitDone(report) => {
+                    self.quit = QuitFlow::Done;
+                    eprintln!(
+                        "Bukno quit: engine exited by itself {}, forced {}, leftover {:?}, saved {}",
+                        report.engine.exited_by_itself, report.engine.forced, report.engine.leftover, report.saved
+                    );
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
         }
     }
+
+    fn apply_view(&mut self, update: ViewUpdate, now: f64) {
+        match update {
+            ViewUpdate::Chats { projects, chats } => {
+                for project in &projects {
+                    self.open_projects.entry(project.id).or_insert(true);
+                }
+                self.projects = projects;
+                self.chats = chats;
+            }
+            ViewUpdate::ConversationLoaded { task, items } => {
+                if self.selected == Some(task) {
+                    self.doc.load(&items);
+                }
+            }
+            ViewUpdate::DraftLoaded { task, text, revision } => self.with_chat(
+                task,
+                |chat, _| {
+                    // Never replace what the user typed since.
+                    if chat.composer.text.is_empty() {
+                        chat.composer.text = text;
+                        chat.composer.revision = chat.composer.revision.max(revision);
+                        chat.extra.draft_sent = chat.composer.revision;
+                        chat.extra.draft_saved = chat.composer.revision;
+                    }
+                },
+                now,
+            ),
+            ViewUpdate::DraftSaved { task, revision } => self.with_chat(
+                task,
+                |chat, _| {
+                    chat.extra.draft_saved = chat.extra.draft_saved.max(revision);
+                    chat.extra.draft_error = None;
+                },
+                now,
+            ),
+            ViewUpdate::DraftFailed { task, reason } => {
+                self.with_chat(task, |chat, _| chat.extra.draft_error = Some(reason), now);
+            }
+            ViewUpdate::ItemUpserted(item) => {
+                let task = item.task;
+                let user = item.kind == ItemKind::UserMessage;
+                let shown = self.selected == Some(task) && (self.view == View::Chat || self.is_synthetic());
+                let new_chat_send = self.view == View::NewChat && self.pending_submit.is_some() && user;
+                if new_chat_send {
+                    // Only in synthetic checks: the new chat is the scenario chat.
+                    self.view = View::Chat;
+                }
+                let run_id = item.run;
+                self.with_chat(
+                    task,
+                    |chat, _| {
+                        if user && let Some(pending) = chat.pending_submit.take() {
+                            // Accepted. Clear only the revision that was sent; anything
+                            // typed since stays.
+                            if chat.composer.revision == pending.revision {
+                                chat.composer.text.clear();
+                                chat.composer.revision += 1;
+                            }
+                            chat.notice = None;
+                        }
+                        if !user
+                            && let Some(run) = chat.run.as_mut()
+                            && run_id == Some(run.run)
+                        {
+                            run.has_output = true;
+                        }
+                    },
+                    now,
+                );
+                if shown || new_chat_send {
+                    if user {
+                        self.transcript.scroll_to_end();
+                    }
+                    self.doc.upsert(&item);
+                }
+            }
+            ViewUpdate::RunStateChanged { task, run, state } => self.with_chat(
+                task,
+                |chat, now| {
+                    match chat.run.as_mut() {
+                        Some(active) if active.run == run => active.state = state,
+                        _ => chat.run = Some(ActiveRun { run, state, started: now, has_output: false }),
+                    }
+                    if state.is_terminal() {
+                        chat.run = None;
+                        chat.extra.activity = None;
+                        chat.extra.stop_slow = None;
+                        if chat.extra.wait.as_ref().is_some_and(|(r, _)| *r == run) {
+                            chat.extra.wait = None;
+                        }
+                    }
+                },
+                now,
+            ),
+            ViewUpdate::RunWaiting { task, run, reason } => {
+                self.with_chat(task, |chat, _| chat.extra.wait = reason.map(|r| (run, r)), now);
+            }
+            ViewUpdate::DeliveryChanged { task, message: _, state } => {
+                if state == DeliveryState::Rejected {
+                    self.with_chat(
+                        task,
+                        |chat, _| {
+                            // Put a refused message back so it can be edited and sent again.
+                            if let Some(body) = chat.extra.rejected_body.take()
+                                && chat.composer.text.is_empty()
+                            {
+                                chat.composer.text = body;
+                                chat.composer.revision += 1;
+                            }
+                        },
+                        now,
+                    );
+                }
+            }
+            ViewUpdate::Activity { task, run: _, text } => {
+                self.with_chat(task, |chat, _| chat.extra.activity = Some(text), now);
+            }
+            ViewUpdate::Decisions { task, decisions } => {
+                self.with_chat(task, |chat, _| chat.extra.decisions = decisions, now);
+            }
+            ViewUpdate::SessionModel { task, model } => {
+                self.with_chat(task, |chat, _| chat.extra.model = Some(model), now);
+            }
+            ViewUpdate::Notice { task, notice } => self.with_chat(
+                task,
+                |chat, _| {
+                    chat.notice = Some(notice.text);
+                    chat.extra.notice_problem = notice.tone == NoticeTone::Problem;
+                },
+                now,
+            ),
+            ViewUpdate::StopSlow { task, run: _, shared } => {
+                self.with_chat(task, |chat, _| chat.extra.stop_slow = Some(shared), now);
+            }
+            ViewUpdate::Unknown { task, run, body, explanation } => {
+                self.with_chat(task, |chat, _| chat.extra.unknown = Some(UnknownView { run, body, explanation }), now);
+            }
+            ViewUpdate::UnknownCleared { task, run } => self.with_chat(
+                task,
+                |chat, _| {
+                    if chat.extra.unknown.as_ref().is_some_and(|u| u.run == run) {
+                        chat.extra.unknown = None;
+                    }
+                },
+                now,
+            ),
+            ViewUpdate::StorageProblem { reason } => {
+                self.banner = Some(format!("Bukno cannot save right now, so nothing new is sent: {reason}"));
+            }
+            ViewUpdate::QuitReady => {}
+        }
+    }
+
+    // ----- Actions --------------------------------------------------------
 
     /// Why Send is unavailable, if it is.
     pub fn send_blocked(&self) -> Option<&'static str> {
         if self.pending_submit.is_some() {
             Some("Sending…")
         } else if self.run.is_some() {
-            // Steering and the next-turn queue land in Pass 1.
+            // Mid-run direction lands in a later pass.
             Some("You can send when this run finishes. Your draft is kept.")
+        } else if self.view == View::Chat && self.selected_summary().is_some_and(|c| !c.available) {
+            Some("This chat's folder is missing, so nothing can be sent.")
+        } else if self.view == View::NewChat
+            && self.new_chat_project.is_none()
+            && !self.is_synthetic()
+            && self.setup.as_ref().is_some_and(|s| s.work_folder_missing)
+        {
+            Some("The work folder is missing, so a new chat cannot start.")
         } else {
             None
         }
+    }
+
+    pub fn preset(&self) -> Option<String> {
+        self.setup.as_ref().map(|s| s.preset.clone())
     }
 
     pub fn submit(&mut self) {
@@ -204,25 +618,131 @@ impl BuknoApp {
             return;
         }
         self.notice = None;
+        self.extra.rejected_body = Some(body.clone());
         self.pending_submit = Some(PendingSubmit { revision: self.composer.revision });
+        let preset = self.preset();
+        if self.view == View::NewChat && !self.is_synthetic() {
+            self.backend.send(UiCommand::SubmitNew {
+                project: self.new_chat_project,
+                provider: Provider::Codex,
+                body,
+                preset,
+            });
+            return;
+        }
+        let Some(task) = self.selected else {
+            return;
+        };
         self.backend.send(UiCommand::Submit {
-            task: synthetic::TASK,
+            task,
             provider: self.provider(),
             draft_revision: self.composer.revision,
             body,
+            preset,
         });
     }
 
     pub fn stop(&mut self) {
-        if let Some(run) = &self.run {
-            self.backend.send(UiCommand::Interrupt { task: synthetic::TASK, run: run.run });
+        if let (Some(run), Some(task)) = (&self.run, self.selected) {
+            self.backend.send(UiCommand::Interrupt { task, run: run.run });
         }
+    }
+
+    pub fn answer(&mut self, decision: &DecisionView, answer: DecisionAnswer) {
+        self.backend.send(UiCommand::Answer {
+            decision: decision.id,
+            run: decision.run,
+            generation: decision.generation,
+            answer,
+        });
+    }
+
+    pub fn engine_action(&self, action: EngineAction) {
+        self.backend.send(UiCommand::Engine(action));
+    }
+
+    /// Hand the draft to storage once typing pauses, and right away on switch.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        if self.is_synthetic() || self.view != View::Chat {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let revision = self.composer.revision;
+        if revision <= self.extra.draft_sent {
+            return;
+        }
+        match self.extra.last_edit {
+            Some((r, at)) if r == revision => {
+                if now - at >= DRAFT_DEBOUNCE {
+                    self.flush_draft();
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(DRAFT_DEBOUNCE - (now - at)));
+                }
+            }
+            _ => {
+                self.extra.last_edit = Some((revision, now));
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(DRAFT_DEBOUNCE));
+            }
+        }
+    }
+
+    pub fn flush_draft(&mut self) {
+        if self.is_synthetic() || self.view != View::Chat || self.composer.revision <= self.extra.draft_sent {
+            return;
+        }
+        let Some(task) = self.selected else {
+            return;
+        };
+        self.extra.draft_sent = self.composer.revision;
+        self.backend.send(UiCommand::SaveDraft {
+            task,
+            revision: self.composer.revision,
+            text: self.composer.text.clone(),
+        });
+    }
+
+    /// Any chat still working, waiting on the user, or about to send.
+    pub fn work_active(&self) -> bool {
+        self.chats.iter().any(|c| {
+            matches!(c.activity, bukno_core::event::ChatActivity::Working | bukno_core::event::ChatActivity::NeedsYou)
+        })
+    }
+
+    /// Closing the window runs the quit flow (section 16).
+    fn on_close_request(&mut self, ctx: &egui::Context) {
+        if self.mode != Mode::Real || self.quit == QuitFlow::Done {
+            return;
+        }
+        if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if self.quit == QuitFlow::Closing {
+            return;
+        }
+        self.flush_draft();
+        if self.work_active() {
+            self.quit = QuitFlow::Asking;
+        } else {
+            self.quit = QuitFlow::Closing;
+            self.backend.send(UiCommand::Quit { stop: true });
+        }
+    }
+
+    pub fn confirm_quit(&mut self) {
+        self.flush_draft();
+        self.quit = QuitFlow::Closing;
+        self.backend.send(UiCommand::Quit { stop: true });
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let new_chat = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
         if ctx.input_mut(|i| i.consume_shortcut(&new_chat)) {
-            self.view = View::NewChat;
+            if self.is_synthetic() {
+                self.view = View::NewChat;
+            } else {
+                self.new_chat(None);
+            }
             ctx.memory_mut(|m| m.request_focus(composer_id()));
         }
         let toggle = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
@@ -236,10 +756,24 @@ impl BuknoApp {
         let ctx = ui.ctx().clone();
         self.evidence.frame_start(&ctx);
         self.apply_events(&ctx);
+        self.on_close_request(&ctx);
         crate::components::update_keyboard_mode(&ctx);
-        self.shortcuts(&ctx);
 
         let full = ui.max_rect();
+        if let Mode::Blocked { title, detail } = &self.mode {
+            let (title, detail) = (title.clone(), detail.clone());
+            screens::setup::blocked(self, ui, full, &title, &detail);
+            return;
+        }
+        let needs_setup = self.mode == Mode::Real && self.setup.as_ref().is_none_or(|s| s.work_folder.is_none());
+        if needs_setup || self.show_setup {
+            ui.painter().rect_filled(full, 0.0, self.theme.color.surface_canvas);
+            screens::setup::show(self, ui, full);
+            return;
+        }
+        self.shortcuts(&ctx);
+        self.autosave(&ctx);
+
         let sidebar = navigation::sidebar_rect(self, full);
         if let Some(rect) = sidebar {
             navigation::sidebar(self, ui, rect);
@@ -249,6 +783,9 @@ impl BuknoApp {
         ui.painter().rect_filled(canvas, 0.0, self.theme.color.surface_canvas);
         screens::chat::titlebar(self, ui, canvas, sidebar.is_some());
         screens::chat::show(self, ui, canvas);
+        if self.quit != QuitFlow::None {
+            screens::chat::quit_dialog(self, ui, full);
+        }
 
         self.evidence.frame_end(&ctx, &mut self.transcript, &self.doc, &self.theme);
     }
@@ -278,14 +815,23 @@ impl BuknoApp {
     }
 }
 
-fn rejection_words(reason: &bukno_core::event::RejectReason) -> String {
-    use bukno_core::event::RejectReason as R;
+/// Stash key for the new-chat composer.
+const NEW_CHAT: TaskId = TaskId(0);
+
+pub fn rejection_words(reason: &RejectReason) -> String {
+    use RejectReason as R;
     match reason {
         R::EmptyMessage => "Nothing to send.".into(),
         R::DuplicateMessage => "That message was already sent.".into(),
         R::RunActive => "Not sent: this chat is still working. Your draft is kept.".into(),
         R::UnknownRun => "That run is no longer active.".into(),
+        R::UnknownChat => "That chat no longer exists. Your draft is kept.".into(),
+        R::Unavailable => "Not sent: this chat's folder is missing. Your draft is kept.".into(),
+        R::WrongProvider => "Not sent: this chat belongs to the other engine. Your draft is kept.".into(),
+        R::StaleDecision => "That request was already answered or has expired.".into(),
         R::NotSaved(why) => format!("Not sent, because it could not be saved first ({why}). Your draft is kept."),
+        R::StorageUnsafe => "Not sent: Bukno cannot save right now. Your draft is kept.".into(),
+        R::Quitting => "Not sent: Bukno is quitting.".into(),
     }
 }
 

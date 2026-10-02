@@ -3,6 +3,7 @@
 
 pub mod build_grid;
 pub mod composer;
+pub mod decision;
 pub mod icons;
 pub mod orb;
 pub mod rows;
@@ -137,4 +138,61 @@ pub fn kbd(ui: &Ui, theme: &Theme, right: egui::Pos2, keys: &[&str]) -> f32 {
 /// The platform's command key label.
 pub fn command_key() -> &'static str {
     if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" }
+}
+
+/// The primary action on a card: filled, with an optional key hint.
+pub fn raised_primary(ui: &mut Ui, theme: &Theme, id: Id, at: egui::Pos2, text: &str, key: Option<&str>) -> Response {
+    let c = &theme.color;
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), theme.font(&theme.text.t_ui_strong), c.on_action);
+    let hint = key.map_or(0.0, |_| 26.0);
+    let rect = Rect::from_min_size(at, vec2(galley.size().x + 24.0 + hint, 32.0));
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, text));
+    let fill = if response.hovered() { c.action.gamma_multiply(0.92) } else { c.action };
+    ui.painter().rect_filled(rect, theme.radius.radius_md, fill);
+    ui.painter().galley(egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0), galley, c.on_action);
+    if let Some(key) = key {
+        let chip = Rect::from_center_size(egui::pos2(rect.right() - 20.0, rect.center().y), vec2(20.0, 18.0));
+        ui.painter().rect_filled(chip, theme.radius.radius_xs, Color32::from_black_alpha(0x18));
+        ui.painter().text(
+            chip.center(),
+            Align2::CENTER_CENTER,
+            key,
+            egui::FontId::new(11.0, egui::FontFamily::Name("geist-500".into())),
+            c.on_action,
+        );
+    }
+    focus_ring(ui, theme, &response, theme.radius.radius_md);
+    response
+}
+
+/// A quiet text button ending at `right.x`, with an optional key hint.
+pub fn flat_text_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: Id,
+    right: egui::Pos2,
+    text: &str,
+    key: Option<&str>,
+) -> Response {
+    let c = &theme.color;
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), theme.font(&theme.text.t_ui), c.text_secondary);
+    let hint = key.map_or(0.0, |_| 30.0);
+    let width = galley.size().x + 20.0 + hint;
+    let rect = Rect::from_min_size(egui::pos2(right.x - width, right.y), vec2(width, 32.0));
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, text));
+    if response.hovered() {
+        ui.painter().rect_filled(rect, theme.radius.radius_md, c.surface_hover);
+    }
+    ui.painter().galley(
+        egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        c.text_secondary,
+    );
+    if let Some(key) = key {
+        kbd(ui, theme, egui::pos2(rect.right() - 8.0, rect.center().y), &[key]);
+    }
+    focus_ring(ui, theme, &response, theme.radius.radius_md);
+    response
 }

@@ -66,3 +66,31 @@ pub unsafe fn window_button_frames(ns_view: NonNull<c_void>) -> Vec<[f64; 4]> {
         })
         .collect()
 }
+
+fn bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is a correctly sized proc_bsdinfo.
+    let n = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (n == size).then_some(info)
+}
+
+pub fn process_start(pid: u32) -> Option<u64> {
+    bsd_info(pid).map(|info| info.pbi_start_tvsec)
+}
+
+/// PIDs whose process group is `leader`.
+pub fn group_members(leader: u32) -> Vec<u32> {
+    // proc_listpids type for "processes in this process group" (sys/proc_info.h).
+    const PROC_PGRP_ONLY: u32 = 2;
+    let mut pids = vec![0 as libc::pid_t; 512];
+    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    // SAFETY: the buffer holds `bytes` bytes of pid_t.
+    let n = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, leader, pids.as_mut_ptr().cast(), bytes) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    let count = n as usize / std::mem::size_of::<libc::pid_t>();
+    pids.truncate(count);
+    pids.into_iter().filter(|p| *p > 0).map(|p| p as u32).collect()
+}

@@ -171,8 +171,13 @@ fn check() -> Result {
     run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))?;
     run(cargo().args(["build", "--workspace"]))?;
     // Windows: compiles the whole workspace for the target; linking and the
-    // real UI smoke check need a Windows machine.
-    run(cargo().args(["check", "--workspace", "--all-targets", "--target", "x86_64-pc-windows-msvc"]))?;
+    // real UI smoke check need a Windows machine. The bundled SQLite is C and
+    // needs the Windows SDK to compile, so this type-check uses SQLite's
+    // bundled bindings without compiling it. The Windows CI job builds it for real.
+    run(cargo()
+        .args(["check", "--workspace", "--all-targets", "--target", "x86_64-pc-windows-msvc"])
+        .env("LIBSQLITE3_SYS_USE_PKG_CONFIG", "1")
+        .env("SQLITE3_LIB_DIR", target_dir()))?;
     println!("check: format, lint, Mac build and Windows compile check passed");
     Ok(())
 }

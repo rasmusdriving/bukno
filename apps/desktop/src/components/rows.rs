@@ -13,6 +13,8 @@ pub enum Trailing<'a> {
     Mark(Provider),
     /// The working ring for a chat whose run is active elsewhere.
     Working(Provider),
+    /// The chat needs the user: an approval, a question, or an unknown outcome.
+    Alert,
 }
 
 pub struct Row<'a> {
@@ -65,6 +67,16 @@ pub fn row(ui: &mut Ui, theme: &Theme, rect: Rect, row: Row<'_>) -> Response {
                 provider_mark(provider),
                 14.0,
                 color,
+            );
+            16.0
+        }
+        Trailing::Alert => {
+            icons::paint(
+                painter,
+                Rect::from_center_size(pos2(right - 8.0, rect.center().y), vec2(16.0, 16.0)),
+                Icon::Alert,
+                14.0,
+                c.text_primary,
             );
             16.0
         }
