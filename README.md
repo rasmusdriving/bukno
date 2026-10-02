@@ -1,6 +1,6 @@
 # Bukno
 
-A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 0 foundation built: the Mac shell, theme and transcript widget run with synthetic data only. No engine is connected yet.
+A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 0 foundation done and reviewed: the Mac shell, theme and transcript widget run with synthetic data only. No engine is connected yet; Pass 1 connects Codex.
 
 ## Agreed architecture
 
@@ -49,7 +49,7 @@ Every launch is the labeled synthetic scenario mode until Pass 1. See the
 
 Planning and source/schema research are complete enough to start the compatibility milestone. Authentication, inference, voice, dictation, and a replacement UI have not been tested end to end. Memory figures in the plan are targets or observations from the existing desktop app, not replacement-app results.
 
-The first-version design system and user journey are done and saved in [docs/design](docs/design/README.md). The first version specification is approved. Next is Pass 0 of the [first milestone](docs/first-milestone.md): Claude builds the scaffolding and interface foundation, then Sol reviews. Keep source and manifests here; install tools and dependency directories on the internal drive as directed in [AGENTS.md](AGENTS.md).
+The first-version design system and user journey are done and saved in [docs/design](docs/design/README.md). The first version specification is approved. Pass 0 is merged and reviewed. Next is Pass 1 of the [first milestone](docs/first-milestone.md): the complete Codex flow on Mac. Keep source and manifests here; install tools and dependency directories on the internal drive as directed in [AGENTS.md](AGENTS.md).
 
 ## License
 

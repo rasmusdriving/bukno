@@ -9,16 +9,18 @@ This is a checklist. The [first version specification](first-version-specificati
 - [x] Design system and 15-screen user journey, approved 1 October 2026 ([docs/design](design/README.md)).
 - [x] First version specification approved, with review changes ([decision 31](decisions.md)).
 
-## Pass 0: foundation and native UI gate
+## Pass 0: foundation and native UI gate (closed 2 October 2026)
+
+Merged as PR 1 after Sol's review. Two by-hand checks move to Pass 3, listed under it.
 
 - [x] Install the Rust toolchain on the internal drive and point Cargo build output there, per [AGENTS.md](../AGENTS.md).
 - [x] Scaffold the workspace, crates, xtask, and token loader ([spec sections 3 and 4](first-version-specification.md#4-repository-scaffold)).
 - [x] Build the coordinator state machine skeleton in `crates/core` ([section 2](first-version-specification.md#coordinator-as-one-state-machine)).
 - [x] Build the transcript widget first and pass its criteria with a large synthetic chat ([section 13](first-version-specification.md#the-transcript-widget)). If egui fails a must-have, compare the next toolkit now ([decision 13](decisions.md)).
-- [ ] Check IME, Swedish text, keyboard-only use, VoiceOver, narrow windows, and idle repaint; measure orb CPU at the capped frame rate. Automatic checks and measurements done; VoiceOver and a real input method still need the by-hand checks in [e2e/scenarios/pass0-native-checks.md](../e2e/scenarios/pass0-native-checks.md). Orb CPU is above its proposed target ([toolkit decision](toolkit-decision.md)).
+- [x] Check IME, Swedish text, keyboard-only use, narrow windows, and idle repaint; measure the working animation's CPU. The orb was replaced by the StreakLabel at 10 fps, about 2.5 % of one core ([decision 35](decisions.md)).
 - [x] Set up egui_kittest so UI checks produce repeatable screenshots.
-- [ ] Add Mac and Windows compilation checks; run the early Windows UI smoke check when a Windows machine is available. Compilation checks done; the Windows UI smoke check has not run.
-- [ ] Sol reviews Pass 0.
+- [x] Add Mac and Windows compilation checks. Mac comes first; Windows compiles in CI so the shared code stays portable ([decision 30](decisions.md)).
+- [x] Sol reviews Pass 0. Ready to merge as the synthetic foundation, no open findings; merged as PR 1 on 2 October 2026. Review evidence is in the artifact folder (`review-pr1-*`).
 
 ## Pass 1: complete Codex flow on Mac
 
@@ -41,6 +43,8 @@ This is a checklist. The [first version specification](first-version-specificati
 
 ## Pass 3: Mac daily driver
 
+- [ ] Carried from Pass 0: by-hand checks of VoiceOver, a real input method, and the real Reduce motion setting in [e2e/scenarios/pass0-native-checks.md](../e2e/scenarios/pass0-native-checks.md), before the component set grows.
+- [ ] Carried from Pass 0: early Windows UI smoke check (typing, selection, scaling, Narrator) when a Windows machine is available.
 - [ ] Full navigation and component set, model picker, To-do, change strip, attachments, settings, usage, menus, and notifications.
 - [ ] Drive-loss, engine-loss, quit, sleep/wake, and crash recovery behavior.
 - [ ] Run every applicable scenario in [section 20](first-version-specification.md#20-end-to-end-verification-and-evidence), including E17 engine update and revert.
