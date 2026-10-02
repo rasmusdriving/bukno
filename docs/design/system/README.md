@@ -4,7 +4,7 @@ Bukno is a native desktop client for two strong agent harnesses: Codex (through 
 
 - **Quiet chrome, clear state.** Surfaces are warm charcoal and almost flat. The only things that stand out are what is running, what needs you, and what changed.
 - **Provider colour is identity, never decoration.** Blue means Codex and orange means Claude, wherever they appear. They never tint a surface, a border or a neutral control.
-- **One live thing per region.** While you watch a run, the working indicator at the end of the chat is the one moving element there. Everything else states its status in words and still glyphs.
+- **One live thing per region.** While you watch a run, the light passing through the activity words at the end of the chat is the one moving element there. Everything else states its status in words and still glyphs.
 - **Chat is for the conversation.** Messages and replies go in the chat. The agent's to-do list and delegated tasks live in the right panel.
 - **Show what the engine reports.** Plans, tool activity and reasoning summaries come from provider events. Never invent progress, percentages or narration to keep the screen busy.
 - **Group with space, not lines.** Hierarchy comes from spacing, weight, text colour and surface tone. Borders are not a default.
@@ -93,17 +93,19 @@ Motion makes real work legible. It is short, interruptible and tied to events.
 
 | Moment | Treatment |
 |---|---|
-| Run is active, chat in view | The `WorkingIndicator` closes the transcript with a `ThinkingOrb`: a small dotted sphere in warm neutral that turns slowly. The provider colour shows only where the work is: a drifting band of light while thinking, a sweep while reading, two small orbiting points while a tool runs. Text beside it fades in once when it changes and never shimmers. The header chip stays still. |
+| Run is active, chat in view | The `WorkingIndicator` closes the transcript with a `StreakLabel`: the engine's current activity in words ("Reading the composer module") in `text-tertiary`, with a soft 120-point band of light passing through the letters once per `loop-streak`. The light's core carries a faint touch of the provider colour; nothing else is tinted. There is no separate moving mark. The words change only on a new engine event, never to keep the screen busy. The header chip stays still. Native rate: 10 frames a second. |
 | Run is active elsewhere | The ring spins once per `loop-working` on the chat's sidebar row. The plan step in progress shows a still arc. |
 | Child task running | Its dot breathes once per `loop-breathe` in Delegated work. |
 | New provider event | The activity line crossfades over `dur-crossfade`; layout does not move. |
 | Step completes | Settles into the done disc over `dur-settle`, once, then stays still. |
-| Waiting for you | Steady attention glyph, and the orb stops and loses its colour. No pulsing. |
+| Waiting for you | Steady attention glyph, and the light stops; the words rest in `text-secondary`. No pulsing. |
 | Error, stopped or disconnected | The working loop stops. Reconnecting uses a slow dashed ring. |
 | Disclosure | Panels, popovers and the change list open over `dur-standard` with `ease-standard` and close with `ease-exit`. |
 | Highest effort | A highlight sweeps the thick slider and a soft glow breathes around it once per `loop-shimmer`, only while the picker is open. |
 
 With reduced motion, every loop stops and the same glyphs and words remain. Stop repainting when the window is hidden, minimised or idle.
+
+The `StreakLabel` replaced the `ThinkingOrb` on 1 October 2026 because the orb cost about 5 % of a CPU core in the native app and the streak about 2.5 % ([08-working-animation-proposal.md](../08-working-animation-proposal.md), decision 35). The orb and the `BuildGrid` proposal stay in the component set for reference.
 
 ## Provider identity
 
@@ -127,7 +129,7 @@ The provider marks in `ProviderMark` are **placeholders** (a hexagon for Codex, 
 - **Navigation:** `SectionLabel`, `ProjectRow`, `ChatRow`, `UsageMeter`, `ProfileRow`, `Breadcrumb`.
 - **Conversation:** `UserMessage`, `AgentTurn`, `PlanStep`, `ActivityLine`, `CodeBlock`, `Notice`, `TaskBrief`, `EventLine`.
 - **Composer:** `Composer`, `PermissionControl`, `ModelControl`, `ModelPicker`, `EffortSlider`, `ChangeStrip`, `ApprovalCard`.
-- **Working and planning:** `ThinkingOrb`, `WorkingIndicator`, `TodoList`.
+- **Working and planning:** `StreakLabel`, `WorkingIndicator`, `TodoList`. For reference only: `ThinkingOrb`, `BuildGrid`.
 - **Delegation and setup:** `TaskRow`, `EngineCard`.
 
 Each component's guidelines say what the consumer provides. Screens and layout are the consumer's; the components only draw themselves.

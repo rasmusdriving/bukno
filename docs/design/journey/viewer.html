@@ -9,6 +9,14 @@
 <link rel="stylesheet" href="../system/components/bundle.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script>
+  // Screen exports: ?streakPhase=0.35 freezes the StreakLabel light at that
+  // point of its pass, so a reduced-motion export still shows it.
+  (function () {
+    var phase = new URLSearchParams(location.search).get('streakPhase');
+    if (phase !== null && !isNaN(Number(phase))) window.BUKNO_STREAK_PHASE = Number(phase);
+  })();
+</script>
 <script src="../system/components/bundle.js"></script>
 <style>
   body { margin: 0; background: #1b1a19; }

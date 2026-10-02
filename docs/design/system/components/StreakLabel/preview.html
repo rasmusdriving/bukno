@@ -1,0 +1,15 @@
+<!-- @dsCard group="Conversation" height=210 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>StreakLabel preview</title></head>
+<body>
+<div id="root" class="bk-demo bk-demo--col"></div>
+<script>
+  var B = window.Bukno, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { width: '640px', display: 'flex', flexDirection: 'column', gap: '22px' } },
+    h(B.WorkingIndicator, { mark: 'streak', provider: 'codex', state: 'reading', activity: 'Reading the composer module', time: '0m 40s' }),
+    h(B.WorkingIndicator, { mark: 'streak', provider: 'claude', state: 'tool', activity: 'Running cargo test -p bukno-ui', time: '1m 02s', summary: 'Checking that drafts survive switching chats.' }),
+    h(B.WorkingIndicator, { mark: 'streak', provider: 'codex', state: 'waiting', activity: 'Waiting for your approval', time: '2m 14s' })));
+</script>
+</body>
+</html>

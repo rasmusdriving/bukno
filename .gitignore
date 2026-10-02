@@ -19,3 +19,11 @@ coverage/
 .local/
 credentials/
 transcripts/
+
+# Per-machine Cargo settings written by scripts/bootstrap.sh
+.cargo/config.local.toml
+
+# egui_kittest snapshot diffs
+*.new.png
+*.diff.png
+*.old.png

@@ -1,0 +1,36 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mac:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Format, lint, build and Windows compile check
+        run: cargo xtask check
+      - name: UI checks
+        # Snapshots were recorded on Apple Silicon with Metal; a different GPU
+        # can differ slightly. Failures here need a look, not an automatic update.
+        run: cargo xtask e2e --provider synthetic --scenario pass0-ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-evidence
+          path: target/bukno-evidence
+
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Build on Windows
+        # Compiles and links on a real Windows runner. This is not the Windows
+        # UI smoke check, which needs a person on a Windows machine.
+        run: cargo build --workspace --all-targets
