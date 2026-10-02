@@ -32,6 +32,13 @@
 //!     success without the provider saying so.
 //! R3  A chat that continued outside Bukno is sent to before its missed
 //!     turns are loaded.
+//!
+//! Found in the review of PR 2:
+//!
+//! C43 Stop and quit stops the active run, then starts the queued one.
+//! C44 A commit that lands after storage failed still reaches the engine.
+//! C45 One outside check per connection hides turns made outside Bukno
+//!     after it, on a later open or send.
 
 use bukno_core::decision::{DecisionAnswer, DecisionKind, DecisionState};
 use bukno_core::event::{
@@ -678,4 +685,104 @@ fn outside_turns_load_before_a_send() {
         _ => None,
     });
     assert_eq!(session.and_then(|s| s.latest_turn).as_deref(), Some("turn-cli"));
+}
+
+fn checks(effects: &[Effect]) -> usize {
+    effects.iter().filter(|e| matches!(e, Effect::Engine(_, EngineRequest::CheckOutside { .. }))).count()
+}
+
+/// C43: quitting stops running work and leaves queued work queued for the next launch.
+#[test]
+fn quit_never_starts_queued_work() {
+    let mut m = machine_with(3);
+    replay(
+        &mut m,
+        vec![
+            engine(1, EngineEventKind::Connected),
+            submit_to(TaskId(1), 1, Writes::Never),
+            recorded(1),
+            submit_to(TaskId(2), 2, Writes::Never),
+            recorded(2),
+            engine(1, accepted(1)),
+            engine(1, accepted(2)),
+            submit_to(TaskId(3), 3, Writes::Never),
+            recorded(3),
+        ],
+    );
+    assert_eq!(m.delivery_state(MessageId(3)), Some(DeliveryState::Queued));
+    let fx = replay(
+        &mut m,
+        vec![
+            Input::Command(Command::Quit { stop: true }),
+            engine(1, ended(1, RunOutcome::Interrupted)),
+            engine(1, ended(2, RunOutcome::Interrupted)),
+            recorded(3),
+        ],
+    );
+    assert_eq!(writes(&fx), 0, "nothing new starts while quitting");
+    assert!(!fx.contains(&Effect::Persist(PersistRequest::MarkAboutToSend { message: MessageId(3) })));
+    assert_eq!(m.delivery_state(MessageId(3)), Some(DeliveryState::Queued), "kept for the next launch");
+    assert!(fx.contains(&Effect::QuitReady), "quit finishes once the running work stopped");
+}
+
+/// C44: after a failed write, a commit already in flight is held, not sent.
+#[test]
+fn storage_failure_holds_a_send_in_flight() {
+    let mut m = machine_with(1);
+    let fx = replay(
+        &mut m,
+        vec![
+            engine(1, EngineEventKind::Connected),
+            submit(1),
+            Input::Stored(StorageResult::WriteFailed { reason: "disk full".into() }),
+            recorded(1),
+        ],
+    );
+    assert_eq!(writes(&fx), 0);
+    assert_eq!(m.delivery_state(MessageId(1)), Some(DeliveryState::Queued));
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::Publish(ViewUpdate::RunWaiting { run: RunId(1), reason: Some(WaitReason::Paused { .. }), .. })
+    )));
+    let again = replay(&mut m, vec![Input::Command(Command::SendQueued { run: RunId(1) })]);
+    assert!(rejected(&again, &RejectReason::StorageUnsafe));
+    assert_eq!(writes(&again), 0);
+}
+
+/// C45: opening a chat and each send ask again, on the same connection.
+#[test]
+fn outside_check_repeats_on_open_and_send() {
+    let mut m = Machine::new();
+    let quiet = || engine(1, EngineEventKind::OutsideChecked { task: TASK, latest_turn: None, items: vec![] });
+    replay(
+        &mut m,
+        vec![
+            Input::Stored(StorageResult::Restored(snapshot_with(vec![], true))),
+            engine(1, EngineEventKind::Connected),
+            submit_to(TASK, 1, Writes::Never),
+            recorded(1),
+            quiet(),
+            engine(1, accepted(1)),
+            engine(1, ended(1, RunOutcome::Completed)),
+        ],
+    );
+    // The user continues the thread in the CLI, then opens it in Bukno.
+    let opened = replay(&mut m, vec![Input::Command(Command::SelectChat { task: TASK })]);
+    assert_eq!(checks(&opened), 1, "opening asks again");
+    let imported = replay(
+        &mut m,
+        vec![engine(
+            1,
+            EngineEventKind::OutsideChecked {
+                task: TASK,
+                latest_turn: Some("turn-cli".into()),
+                items: vec![ImportedItem { provider_item: "u9".into(), user: true, text: "from the CLI".into() }],
+            },
+        )],
+    );
+    assert!(imported.iter().any(|e| matches!(e, Effect::Persist(PersistRequest::ImportItems { .. }))));
+    let sent = replay(&mut m, vec![submit_to(TASK, 2, Writes::Never), recorded(2)]);
+    assert_eq!(checks(&sent), 1, "the send asks again");
+    assert_eq!(writes(&sent), 0, "and waits for the answer");
+    assert_eq!(writes(&replay(&mut m, vec![quiet()])), 1);
 }

@@ -412,13 +412,19 @@ impl BuknoApp {
                     self.setup = Some(view);
                 }
                 UiEvent::Opened { task } => {
-                    // The first message created this chat: carry the composer over.
-                    let state = self.take_current();
-                    self.selected = Some(task);
-                    self.view = View::Chat;
-                    self.put_current(state);
-                    self.doc = Document::default();
-                    self.transcript = TranscriptView::default();
+                    // The first message created this chat: its new-chat state moves
+                    // with it. If the user moved on before this arrived, that state
+                    // was stashed and they stay where they are.
+                    if self.view == View::NewChat {
+                        let state = self.take_current();
+                        self.selected = Some(task);
+                        self.view = View::Chat;
+                        self.put_current(state);
+                        self.doc = Document::default();
+                        self.transcript = TranscriptView::default();
+                    } else if let Some(state) = self.stash.remove(&NEW_CHAT) {
+                        self.stash.insert(task, state);
+                    }
                 }
                 UiEvent::Notice(text) => self.banner = Some(text),
                 UiEvent::QuitDone(report) => {
@@ -456,6 +462,10 @@ impl BuknoApp {
                         chat.composer.revision = chat.composer.revision.max(revision);
                         chat.extra.draft_sent = chat.composer.revision;
                         chat.extra.draft_saved = chat.composer.revision;
+                    } else if chat.composer.revision <= revision {
+                        // Typed before the saved draft arrived: number it after the
+                        // saved one, or storage would keep the older text.
+                        chat.composer.revision = revision + 1;
                     }
                 },
                 now,

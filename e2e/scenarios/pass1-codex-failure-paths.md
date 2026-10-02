@@ -91,6 +91,12 @@ full live flow passed. Bukno keeps `experimentalApi` off, per section 9.
 | C40 | Interactive question from the engine (`item/tool/requestUserInput`) | Shown as a question card with its options and free text; a cancelled or timed-out question is never turned into permission | Peer (the stable API rarely sends it) |
 | C41 | Two runs already active (the default limit) | A third submission waits visibly as queued; it is not rejected or lost | Replay |
 | C42 | Approval card while the user is in another chat | The waiting chat shows Needs approval in the sidebar; answering it later still reaches the right run | kittest |
+| C43 | Stop and quit with one run working and another queued | The working run stops; the queued message is never started and stays queued for the next launch | Replay |
+| C44 | A write to storage fails while a message's commit is still in flight | The message is not sent; it waits, paused, with the reason in words; Send now is refused while storage is unsafe | Replay |
+| C45 | Chat continued outside Bukno after Bukno already checked on this connection | Opening the chat and each send ask the engine again; missed turns load before the send | Replay |
+| C46 | A sent or cleared draft leaves an empty saved draft | Its revision survives relaunch, so the next save is stored, not silently refused; typing before the saved draft loads is kept | kittest (real coordinator and SQLite) |
+| C47 | The user moves to another chat before a new chat's first message opens it | Each chat keeps its own draft; the user stays where they went; the new chat is not stuck sending | kittest |
+| C48 | Approval card at the 640 x 480 minimum window, also with a long command and a long draft | Allow once and Deny stay on screen above the composer; a long command scrolls inside the card | kittest |
 
 ## Coverage after the first live run
 
@@ -107,3 +113,13 @@ app UI) and `cargo test -p bukno-core --test replay` (replay). Evidence:
 | Later pass | C39 (sleep and wake, Pass 3) |
 
 The protocol-peer process for the simulated rows has not been written yet.
+
+## Rows from the PR 2 review
+
+Sol's review of commit 6b095cd reproduced six defects, now rows C43 to C48.
+Fixed and proven on 2 October 2026: C43 to C45 by replay
+(`cargo test -p bukno-core --test replay`), C46 to C48 by the UI checks
+(`cargo xtask e2e --provider synthetic --scenario pass0-ui`). The live Codex
+flow was run again after the fixes and passed on Codex 0.160.0. The review's
+own reproduction is in
+`/Volumes/TOSHIBA Workspace/dev/artifacts/bukno/2026-10-02/review-pr2-6b095cd/`.

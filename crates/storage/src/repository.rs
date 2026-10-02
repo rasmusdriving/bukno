@@ -130,8 +130,8 @@ pub fn load_history(conn: &Connection, task: TaskId) -> rusqlite::Result<History
         .query_row("SELECT text, revision FROM draft WHERE task_id = ?1", params![task.hex()], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
         })
-        .optional()?
-        .filter(|(text, _)| !text.is_empty());
+        .optional()?;
+    // An empty draft still carries its revision, so later saves are numbered after it.
     Ok((items, draft))
 }
 

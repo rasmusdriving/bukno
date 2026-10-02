@@ -45,6 +45,7 @@ struct Task {
     /// The newest run, which decides the chat's state.
     latest: Option<RunId>,
     /// Connection generation on which outside continuation was last checked.
+    /// Cleared when the chat is opened and when a message is about to be sent.
     outside_checked: Option<u64>,
     /// Connection generation on which a check was asked for and not yet answered.
     outside_pending: Option<u64>,
@@ -230,6 +231,8 @@ impl Machine {
                 self.selected = Some(task);
                 fx.push(Effect::Load(LoadRequest::History { task }));
                 self.republish_task(task, fx);
+                // The chat may have continued elsewhere since the last check.
+                self.outside_stale(task);
                 self.check_outside(task, false, fx);
             }
             Command::SaveDraft { task, revision, text } => {
@@ -429,6 +432,7 @@ impl Machine {
         let state = if wait.is_none() { DeliveryState::AboutToSend } else { DeliveryState::Queued };
         if wait.is_none() {
             self.take_lease(run);
+            self.outside_stale(task);
         } else {
             self.queue.push(run);
         }
@@ -772,16 +776,7 @@ impl Machine {
                     .map(|(id, r)| (*id, r.message))
                     .collect();
                 for (run, message) in waiting {
-                    if let Some(record) = self.runs.get_mut(&run) {
-                        record.lease = Lease::None;
-                        record.paused = Some(reason.clone());
-                    }
-                    if let Some(delivery) = self.deliveries.get_mut(&message) {
-                        delivery.state = DeliveryState::Queued;
-                    }
-                    self.queue.push(run);
-                    fx.push(Effect::Persist(PersistRequest::DeliveryState { message, state: DeliveryState::Queued }));
-                    self.publish_wait(run, Some(WaitReason::Paused { why: reason.clone() }), fx);
+                    self.hold(run, message, &reason, fx);
                 }
                 self.dispatch_queue(fx);
                 self.publish_chats(fx);
@@ -1298,8 +1293,12 @@ impl Machine {
         }
     }
 
-    /// Send every queued run that can go now, oldest first.
+    /// Send every queued run that can go now, oldest first. Nothing new
+    /// starts while quitting: queued messages stay queued for the next launch.
     fn dispatch_queue(&mut self, fx: &mut Vec<Effect>) {
+        if self.quitting {
+            return;
+        }
         let queued = self.queue.clone();
         for run in queued {
             let Some(record) = self.runs.get(&run) else {
@@ -1320,7 +1319,8 @@ impl Machine {
             }
             self.queue.retain(|r| *r != run);
             self.take_lease(run);
-            let message = self.runs[&run].message;
+            let (task, message) = (self.runs[&run].task, self.runs[&run].message);
+            self.outside_stale(task);
             if let Some(delivery) = self.deliveries.get_mut(&message) {
                 delivery.state = DeliveryState::AboutToSend;
                 delivery.recorded = false;
@@ -1332,13 +1332,29 @@ impl Machine {
 
     /// Write a recorded delivery's turn to the engine on `generation`.
     fn start_turn(&mut self, message: MessageId, generation: u64, fx: &mut Vec<Effect>) {
-        let Some(delivery) = self.deliveries.get_mut(&message) else {
+        let Some(delivery) = self.deliveries.get(&message) else {
             return;
         };
         if delivery.state != DeliveryState::AboutToSend || !delivery.recorded {
             return;
         }
-        let Some(run) = self.runs.get_mut(&delivery.run) else {
+        let run_id = delivery.run;
+        if self.runs.get(&run_id).is_none_or(|r| r.state != RunState::Preparing) {
+            return;
+        }
+        // Every path to the engine ends here, so these rules hold for all of them.
+        if self.quitting {
+            self.hold(run_id, message, "Bukno quit before this was sent.", fx);
+            return;
+        }
+        if !self.storage_ok {
+            self.hold(run_id, message, "Bukno cannot save right now, so this was not sent.", fx);
+            return;
+        }
+        let Some(delivery) = self.deliveries.get_mut(&message) else {
+            return;
+        };
+        let Some(run) = self.runs.get_mut(&run_id) else {
             return;
         };
         if run.state != RunState::Preparing {
@@ -1380,6 +1396,26 @@ impl Machine {
         fx.push(Effect::Publish(ViewUpdate::RunStateChanged { task: task_id, run: run_id, state: RunState::Starting }));
         self.publish_wait(run_id, None, fx);
         self.publish_chats(fx);
+    }
+
+    /// Put a run that was never written back in the queue, paused with `why`,
+    /// so it waits for the user instead of being sent.
+    fn hold(&mut self, run: RunId, message: MessageId, why: &str, fx: &mut Vec<Effect>) {
+        if let Some(record) = self.runs.get_mut(&run) {
+            record.lease = Lease::None;
+            record.paused = Some(why.to_owned());
+        }
+        if let Some(delivery) = self.deliveries.get_mut(&message) {
+            delivery.state = DeliveryState::Queued;
+        }
+        if !self.queue.contains(&run) {
+            self.queue.push(run);
+        }
+        fx.push(Effect::Persist(PersistRequest::DeliveryState { message, state: DeliveryState::Queued }));
+        self.publish_wait(run, Some(WaitReason::Paused { why: why.to_owned() }), fx);
+        if self.quitting && self.active_count(None) == 0 {
+            self.quit_ready(fx);
+        }
     }
 
     /// Every unsettled run written to `generation` becomes OutcomeUnknown and
@@ -1440,8 +1476,9 @@ impl Machine {
         }
     }
 
-    /// Ask the engine whether the chat continued outside Bukno, once per
-    /// connection. When opening a chat this is skipped while it is busy;
+    /// Ask the engine whether the chat continued outside Bukno, unless a check
+    /// on this connection is still current. Opening the chat and each send
+    /// make it stale. When opening a chat this is skipped while it is busy;
     /// before a send (`for_send`) it always runs.
     fn check_outside(&mut self, task: TaskId, for_send: bool, fx: &mut Vec<Effect>) {
         let Some(entry) = self.tasks.get(&task) else {
@@ -1466,6 +1503,13 @@ impl Machine {
             entry.outside_pending = Some(generation);
         }
         fx.push(Effect::Engine(provider, EngineRequest::CheckOutside { task, session, cwd }));
+    }
+
+    /// A check covers one open or one send; the next one asks the engine again.
+    fn outside_stale(&mut self, task: TaskId) {
+        if let Some(entry) = self.tasks.get_mut(&task) {
+            entry.outside_checked = None;
+        }
     }
 
     fn import(

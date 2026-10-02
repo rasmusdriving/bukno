@@ -17,6 +17,8 @@ use crate::transcript::column_rect;
 
 /// Height reserved after the last message for the working indicator.
 const WORKING_HEIGHT: f32 = 56.0;
+/// Transcript space left beside a decision card in a small window.
+const DECISION_TRANSCRIPT_MIN: f32 = 16.0;
 
 /// The canvas part of the titlebar: a drag region with the breadcrumb.
 pub fn titlebar(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect, sidebar_shown: bool) {
@@ -587,30 +589,55 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
 
     // Composer at the bottom, then docked cards, then the transcript fills the space between.
     // The transcript keeps at least 120 points; the composer scrolls inside beyond that.
-    let composer_max = body.height() - 36.0 - 120.0 - theme.size.size_inset_bottom;
+    // A decision must stay answerable, so it is reserved first and may shrink the
+    // transcript to a few lines, even in the smallest window.
+    let docks = docked(app);
+    let decision_h = match docks.first() {
+        Some(Dock::Decision(d, _)) => Some(decision::height(ui, &theme, d, column.width(), decision::CODE_MIN)),
+        _ => None,
+    };
+    let transcript_min = if decision_h.is_some() { DECISION_TRANSCRIPT_MIN } else { 120.0 };
+    let composer_max =
+        body.height() - 36.0 - transcript_min - theme.size.size_inset_bottom - decision_h.map_or(0.0, |h| h + 18.0);
     let composer_h = composer::height_for(ui, &theme, &app.composer, column.width(), composer_max);
     let composer_rect = Rect::from_min_size(
         pos2(column.left(), body.bottom() - theme.size.size_inset_bottom - composer_h),
         vec2(column.width(), composer_h),
     );
-    let docks = docked(app);
-    let mut dock_bottom = composer_rect.top() - 10.0;
+    // Cards leave room for the one-line note above the composer when it shows.
+    let note_line = app.notice.is_some()
+        || app.extra.draft_error.is_some()
+        || (app.send_blocked().is_some() && !app.composer.text.trim().is_empty());
+    let mut dock_bottom = composer_rect.top() - if note_line && !docks.is_empty() { 28.0 } else { 10.0 };
     let mut placed = Vec::new();
     for dock in docks {
-        let h = match &dock {
-            Dock::Decision(d, _) => decision::height(ui, &theme, d, column.width()),
-            Dock::Notice { text, actions, .. } => notice_height(ui, &theme, column.width(), text, actions.len()),
+        let (h, min, code_max) = match &dock {
+            Dock::Decision(d, _) => {
+                // Shorten the command box, which scrolls, before giving up space it needs.
+                let room = dock_bottom - (header_top + 28.0 + DECISION_TRANSCRIPT_MIN);
+                let full = decision::height(ui, &theme, d, column.width(), decision::CODE_MAX);
+                let code_max = (decision::CODE_MAX - (full - room).max(0.0)).max(decision::CODE_MIN);
+                (decision::height(ui, &theme, d, column.width(), code_max), DECISION_TRANSCRIPT_MIN, code_max)
+            }
+            Dock::Notice { text, actions, .. } => {
+                (notice_height(ui, &theme, column.width(), text, actions.len()), 120.0, 0.0)
+            }
         };
-        // Never push the transcript below its minimum.
-        if dock_bottom - h < header_top + 28.0 + 120.0 {
+        // Never push the transcript below its minimum, except for a decision:
+        // it is always shown, because the run cannot go on without an answer.
+        let decision = matches!(dock, Dock::Decision(..));
+        if dock_bottom - h < header_top + 28.0 + min && !decision {
             break;
         }
         let rect = Rect::from_min_size(pos2(column.left(), dock_bottom - h), vec2(column.width(), h));
         dock_bottom = rect.top() - 8.0;
-        placed.push((rect, dock));
+        placed.push((rect, dock, code_max));
     }
-    let transcript_rect =
-        Rect::from_min_max(pos2(body.left(), header_top + 28.0), pos2(body.right(), dock_bottom - 2.0));
+    let transcript_top = header_top + 28.0;
+    let transcript_rect = Rect::from_min_max(
+        pos2(body.left(), transcript_top),
+        pos2(body.right(), (dock_bottom - 2.0).max(transcript_top)),
+    );
 
     let trailing = if app.run.is_some() { WORKING_HEIGHT } else { 0.0 };
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(transcript_rect));
@@ -651,7 +678,7 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
         .iter()
         .find(|p| Some(p.id.to_owned()) == app.preset())
         .map_or("", |p| p.protection);
-    for (rect, dock) in placed {
+    for (rect, dock, code_max) in placed {
         match dock {
             Dock::Decision(d, count) => {
                 let provider = provider_name(app.provider());
@@ -660,6 +687,7 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                     ui,
                     &theme,
                     rect,
+                    code_max,
                     &d,
                     provider,
                     folder.as_deref().unwrap_or(""),

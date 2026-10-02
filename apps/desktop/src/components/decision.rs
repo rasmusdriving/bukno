@@ -14,6 +14,10 @@ use super::{focus_ring, kbd};
 use crate::theme::Theme;
 
 const PAD: f32 = 16.0;
+/// Tallest the command or diff box grows before it scrolls.
+pub const CODE_MAX: f32 = 110.0;
+/// Shortest it gets in a small window: two lines, still scrollable.
+pub const CODE_MIN: f32 = 40.0;
 const MAX_FILES: usize = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,13 +62,14 @@ fn reason(kind: &DecisionKind) -> Option<&str> {
     }
 }
 
-pub fn height(ui: &Ui, theme: &Theme, decision: &DecisionView, width: f32) -> f32 {
+/// The card's height when its command box is at most `code_max` tall.
+pub fn height(ui: &Ui, theme: &Theme, decision: &DecisionView, width: f32, code_max: f32) -> f32 {
     let inner = width - 2.0 * PAD;
     let mut h = PAD + 22.0 + 12.0;
     if let Some(text) = body(&decision.kind) {
         let galley =
             ui.painter().layout_job(theme.job(text, &theme.text.t_code, theme.color.text_primary, inner - 24.0));
-        h += galley.size().y.min(110.0) + 24.0 + 10.0;
+        h += galley.size().y.min(code_max) + 24.0 + 10.0;
     }
     if let DecisionKind::Question { questions } = &decision.kind {
         for q in questions {
@@ -77,13 +82,14 @@ pub fn height(ui: &Ui, theme: &Theme, decision: &DecisionView, width: f32) -> f3
     h + 32.0 + PAD
 }
 
-/// Draw the card in `rect` (use [`height`]). `protection` says what enforces
-/// the action; `folder` is where it runs.
+/// Draw the card in `rect` (use [`height`] with the same `code_max`).
+/// `protection` says what enforces the action; `folder` is where it runs.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     theme: &Theme,
     rect: Rect,
+    code_max: f32,
     decision: &DecisionView,
     provider: &str,
     folder: &str,
@@ -135,11 +141,20 @@ pub fn show(
 
     if let Some(text) = body(&decision.kind) {
         let galley = ui.painter().layout_job(theme.job(text, &theme.text.t_code, c.text_primary, inner - 24.0));
-        let h = galley.size().y.min(110.0) + 24.0;
+        let full = galley.size().y;
+        let h = full.min(code_max) + 24.0;
         let code = Rect::from_min_size(pos2(x, y), vec2(inner, h));
         ui.painter().rect_filled(code, theme.radius.radius_md, c.surface_code);
         let clip = code.shrink(12.0);
-        ui.painter().with_clip_rect(clip).galley(clip.min, galley, c.text_primary);
+        if full <= clip.height() + 0.5 {
+            ui.painter().with_clip_rect(clip).galley(clip.min, galley, c.text_primary);
+        } else {
+            // Longer than the box: it scrolls, so the whole command can be read before answering.
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(clip));
+            egui::ScrollArea::vertical().id_salt(id.with("code")).auto_shrink([false, false]).show(&mut child, |ui| {
+                ui.add(egui::Label::new(galley).selectable(false));
+            });
+        }
         y += h + 10.0;
     }
 
