@@ -24,13 +24,16 @@ Merged as PR 1 after Sol's review. Two by-hand checks move to Pass 3, listed und
 
 ## Pass 1: complete Codex flow on Mac
 
-- [ ] Enumerate the Codex failure rows in [section 18](first-version-specification.md#18-failure-paths-to-enumerate-before-adapter-implementation) before writing the adapter.
-- [ ] Onboarding with the work folder choice; app state on the internal drive ([section 5](first-version-specification.md#5-file-placement-and-application-data)).
-- [ ] The nine Pass 1 tables, delivery outbox, transcript items, and writer lease ([section 6](first-version-specification.md#6-domain-model-and-durable-records)).
-- [ ] Tolerant Codex adapter, last working version record, and revert ([sections 9 and 9a](first-version-specification.md#9a-engine-versions-and-reverting)).
-- [ ] Codex permission presets and decision cards ([section 11](first-version-specification.md#11-permissions-and-user-questions)).
-- [ ] Complete a task in a disposable Git repository and in a projectless chat through the real app: streamed output, one declined and one allowed action, Stop, saved draft, resume after restart, and preserved unrelated edits.
-- [ ] Launch Bukno.app from Finder and retain the Codex evidence package.
+Built and run end to end on 2 October 2026 (commit b0a0c28, Codex 0.158.0). Evidence is in the artifact folder under `2026-10-02/b0a0c28f76/macos/codex/`.
+
+- [x] Enumerate the Codex failure rows in [section 18](first-version-specification.md#18-failure-paths-to-enumerate-before-adapter-implementation) before writing the adapter: [pass1-codex-failure-paths.md](../e2e/scenarios/pass1-codex-failure-paths.md), with what the installed engine actually does.
+- [x] Onboarding with the work folder choice; app state on the internal drive ([section 5](first-version-specification.md#5-file-placement-and-application-data)).
+- [x] The nine Pass 1 tables, delivery outbox, transcript items, and writer lease ([section 6](first-version-specification.md#6-domain-model-and-durable-records)).
+- [x] Tolerant Codex adapter, last working version record, and revert ([sections 9 and 9a](first-version-specification.md#9a-engine-versions-and-reverting)). Revert proven with the old file still on disk; the npm reinstall route is built but not yet run.
+- [x] Codex permission presets and decision cards ([section 11](first-version-specification.md#11-permissions-and-user-questions)): "Ask before commands" (default) and "Ask before changes", both proven live.
+- [x] Complete a task in a disposable Git repository and in a projectless chat through the real app: streamed output, one declined and one allowed action, Stop, saved draft, resume after restart, and preserved unrelated edits. Also an engine killed mid-turn, reconciled from Codex history without a resend.
+- [x] Launch Bukno.app from Finder and retain the Codex evidence package.
+- [ ] Failure rows still to prove, mostly with a protocol-peer process: see the coverage table in the failure-path list.
 - [ ] Sol reviews Pass 1.
 
 ## Pass 2: Claude on Mac

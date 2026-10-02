@@ -73,10 +73,26 @@ the app-server protocol directly. Raw logs:
 | C33 | Work folder or project folder missing at launch | App opens; affected chats show Unavailable and keep their identity; no replacement folder is created | Live (rename a folder) |
 | C34 | SQLite write fails (disk full or read-only) | Nothing is sent; the draft stays with "Not saved" in words | Peer (read-only state folder) |
 | C35 | Second Bukno launch on the same state folder | Refused with the owner's PID; the first instance is untouched | Live |
-| C36 | Database from a newer Bukno | Opened read-only refusal screen; files preserved | Replay (bumped schema version) |
+| C36 | Database from a newer Bukno | Bukno refuses to change it, says so, and preserves the files | Replay (bumped schema version) |
 | C37 | Bukno crashes with a run active | Engine exits on end of input; next launch reconciles from the outbox and process records; no leftover engine | Live (kill -9 Bukno) |
 | C38 | Quit with active work | Keep working or Stop and quit; an orderly quit stops runs, saves drafts, ends the engine and verifies it exited | Live |
 | C39 | Mac sleeps with a run active | On wake, a dead transport becomes Outcome unknown and reconciles; nothing is resent | Pass 3 (recorded here, not built in Pass 1) |
 | C40 | Interactive question from the engine (`item/tool/requestUserInput`) | Shown as a question card with its options and free text; a cancelled or timed-out question is never turned into permission | Peer (the stable API rarely sends it) |
 | C41 | Two runs already active (the default limit) | A third submission waits visibly as queued; it is not rejected or lost | Replay |
 | C42 | Approval card while the user is in another chat | The waiting chat shows Needs approval in the sidebar; answering it later still reaches the right run | kittest |
+
+## Coverage after the first live run
+
+Run on commit b0a0c28, 2 October 2026, Codex 0.158.0, with
+`cargo xtask e2e --provider codex --scenario pass1` (live, through the real
+app UI) and `cargo test -p bukno-core --test replay` (replay). Evidence:
+`/Volumes/TOSHIBA Workspace/dev/artifacts/bukno/2026-10-02/b0a0c28f76/macos/codex/`.
+
+| Status | Rows |
+|---|---|
+| Proven live | C02, C03, C04, C08 (observed, model chosen from the list), C09, C15 (long replies), C19, C20, C26, C31, C35, C38, plus the revert route "file still on disk" and Try latest version |
+| Proven by replay | C16, C17, C21, C22, C23, C25, C30, C41, restart without resend, outside turns loaded before a send |
+| Built, not yet proven | C01 (missing engine), C05, C06 (revert target gone), C07 (signed out), C10 to C14 (malformed, oversized and unknown protocol messages), C18, C24, C27 (Force stop), C28, C29 live, C30 live, C32, C33 (missing folder), C34 (store failure), C36, C37 (Bukno itself killed mid-run), C40, C42 |
+| Later pass | C39 (sleep and wake, Pass 3) |
+
+The protocol-peer process for the simulated rows has not been written yet.

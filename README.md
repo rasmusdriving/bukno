@@ -1,6 +1,6 @@
 # Bukno
 
-A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 0 foundation done and reviewed: the Mac shell, theme and transcript widget run with synthetic data only. No engine is connected yet; Pass 1 connects Codex.
+A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 1 built: the Mac app runs real Codex chats, with or without a project, through your existing Codex login. Claude arrives in Pass 2.
 
 ## Agreed architecture
 
@@ -26,11 +26,14 @@ cargo xtask doctor               # reports tools and locations
 cargo xtask dev --scenario long-chat
 cargo xtask check                # format, lint, Mac build, Windows compile check
 cargo xtask e2e --provider synthetic --scenario pass0-ui
+cargo xtask e2e --provider codex --scenario pass1   # live: uses your Codex login and a little usage
 cargo xtask package --platform macos
 ```
 
-Every launch is the labeled synthetic scenario mode until Pass 1. See the
-[Pass 0 toolkit decision](docs/toolkit-decision.md) for what was verified.
+A normal launch uses your app state in `~/Library/Application Support/Bukno/`
+and the installed Codex. `--scenario <name>` starts the labeled synthetic mode
+instead. See the [Pass 0 toolkit decision](docs/toolkit-decision.md) for what
+was verified.
 
 ## Project documents
 
@@ -47,9 +50,9 @@ Every launch is the labeled synthetic scenario mode until Pass 1. See the
 
 ## Current status
 
-Planning and source/schema research are complete enough to start the compatibility milestone. Authentication, inference, voice, dictation, and a replacement UI have not been tested end to end. Memory figures in the plan are targets or observations from the existing desktop app, not replacement-app results.
+Codex text work runs end to end in the Mac app with the existing Codex login (Codex 0.158.0, 2 October 2026). Claude, voice and dictation have not been tested end to end, and Windows has only been compile-checked. Memory figures in the plan are targets or observations from the existing desktop app, not Bukno results.
 
-The first-version design system and user journey are done and saved in [docs/design](docs/design/README.md). The first version specification is approved. Pass 0 is merged and reviewed. Next is Pass 1 of the [first milestone](docs/first-milestone.md): the complete Codex flow on Mac. Keep source and manifests here; install tools and dependency directories on the internal drive as directed in [AGENTS.md](AGENTS.md).
+The first-version design system and user journey are done and saved in [docs/design](docs/design/README.md). The first version specification is approved. Pass 0 is merged and reviewed. Pass 1 (the complete Codex flow on Mac) is built and passed its live end-to-end run; it waits for Sol's review. See the [first milestone](docs/first-milestone.md). Keep source and manifests here; install tools and dependency directories on the internal drive as directed in [AGENTS.md](AGENTS.md).
 
 ## License
 
