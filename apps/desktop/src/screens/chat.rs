@@ -4,7 +4,7 @@
 use bukno_core::run::RunState;
 use egui::{Align2, Id, Rect, Sense, Ui, ViewportCommand, pos2, vec2};
 
-use bukno_core::decision::DecisionAnswer;
+use bukno_core::decision::{DecisionAnswer, DecisionKind};
 use bukno_core::event::WaitReason;
 
 use crate::app::{BuknoApp, Menu, QuitFlow, View};
@@ -19,6 +19,8 @@ use crate::transcript::column_rect;
 const WORKING_HEIGHT: f32 = 56.0;
 /// Transcript space left beside a decision card in a small window.
 const DECISION_TRANSCRIPT_MIN: f32 = 16.0;
+/// Shortest a question card gets: its actions plus room to scroll the questions.
+const QUESTION_CARD_MIN: f32 = 220.0;
 
 /// The canvas part of the titlebar: a drag region with the breadcrumb.
 pub fn titlebar(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect, sidebar_shown: bool) {
@@ -617,7 +619,12 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                 let room = dock_bottom - (header_top + 28.0 + DECISION_TRANSCRIPT_MIN);
                 let full = decision::height(ui, &theme, d, column.width(), decision::CODE_MAX);
                 let code_max = (decision::CODE_MAX - (full - room).max(0.0)).max(decision::CODE_MIN);
-                (decision::height(ui, &theme, d, column.width(), code_max), DECISION_TRANSCRIPT_MIN, code_max)
+                let mut h = decision::height(ui, &theme, d, column.width(), code_max);
+                if matches!(d.kind, DecisionKind::Question { .. }) {
+                    // Questions scroll inside a card capped to the room left.
+                    h = h.min(room.max(QUESTION_CARD_MIN));
+                }
+                (h, DECISION_TRANSCRIPT_MIN, code_max)
             }
             Dock::Notice { text, actions, .. } => {
                 (notice_height(ui, &theme, column.width(), text, actions.len()), 120.0, 0.0)

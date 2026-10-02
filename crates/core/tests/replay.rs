@@ -39,6 +39,11 @@
 //! C44 A commit that lands after storage failed still reaches the engine.
 //! C45 One outside check per connection hides turns made outside Bukno
 //!     after it, on a later open or send.
+//!
+//! Second review pass:
+//!
+//! C49 A failed outside check counts as "nothing changed", so the send goes
+//!     ahead without the missed turns and without telling the user.
 
 use bukno_core::decision::{DecisionAnswer, DecisionKind, DecisionState};
 use bukno_core::event::{
@@ -785,4 +790,37 @@ fn outside_check_repeats_on_open_and_send() {
     assert_eq!(checks(&sent), 1, "the send asks again");
     assert_eq!(writes(&sent), 0, "and waits for the answer");
     assert_eq!(writes(&replay(&mut m, vec![quiet()])), 1);
+}
+
+/// C49: a failed outside check holds the send; only Send now sends it, unchecked and said so.
+#[test]
+fn failed_outside_check_holds_the_send() {
+    let mut m = Machine::new();
+    let fx = replay(
+        &mut m,
+        vec![
+            Input::Stored(StorageResult::Restored(snapshot_with(vec![], true))),
+            engine(1, EngineEventKind::Connected),
+            submit_to(TASK, 1, Writes::Never),
+            recorded(1),
+            engine(1, EngineEventKind::OutsideCheckFailed { task: TASK, reason: "thread/turns/list failed".into() }),
+        ],
+    );
+    assert_eq!(writes(&fx), 0, "a failed check is not an all clear");
+    assert_eq!(m.delivery_state(MessageId(1)), Some(DeliveryState::Queued));
+    let why = fx.iter().find_map(|e| match e {
+        Effect::Publish(ViewUpdate::RunWaiting { run: RunId(1), reason: Some(WaitReason::Paused { why }), .. }) => {
+            Some(why.clone())
+        }
+        _ => None,
+    });
+    assert!(why.is_some_and(|w| w.contains("could not check")), "the user is told why it waits");
+
+    let go = replay(&mut m, vec![Input::Command(Command::SendQueued { run: RunId(1) }), recorded(1)]);
+    assert_eq!(checks(&go), 0, "Send now does not ask again");
+    assert_eq!(started_runs(&go), vec![RunId(1)], "it sends once the user chose to");
+    assert!(go.iter().any(|e| matches!(
+        e,
+        Effect::Publish(ViewUpdate::Notice { notice, .. }) if notice.text.contains("without checking")
+    )));
 }

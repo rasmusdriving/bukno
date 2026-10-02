@@ -97,6 +97,10 @@ full live flow passed. Bukno keeps `experimentalApi` off, per section 9.
 | C46 | A sent or cleared draft leaves an empty saved draft | Its revision survives relaunch, so the next save is stored, not silently refused; typing before the saved draft loads is kept | kittest (real coordinator and SQLite) |
 | C47 | The user moves to another chat before a new chat's first message opens it | Each chat keeps its own draft; the user stays where they went; the new chat is not stuck sending | kittest |
 | C48 | Approval card at the 640 x 480 minimum window, also with a long command and a long draft | Allow once and Deny stay on screen above the composer; a long command scrolls inside the card | kittest |
+| C49 | The outside check fails (an error from `thread/turns/list`, or no answer in time) | Never treated as "nothing changed": the send is held with the reason in words; Send now sends it without the check and says so | Replay |
+| C50 | Send pressed before the chat's saved draft loads | The sent text still leaves the composer when accepted, so it cannot be sent twice | kittest |
+| C51 | Question card whose questions have both choices and a text field | Measured by the same rules it is drawn with; every field and both actions sit above the composer | kittest |
+| C52 | Question card taller than the window (several questions at 640 x 480) | The card is capped to the space left and its questions scroll; Send answer and Skip stay on screen | kittest |
 
 ## Coverage after the first live run
 
@@ -123,3 +127,7 @@ Fixed and proven on 2 October 2026: C43 to C45 by replay
 flow was run again after the fixes and passed on Codex 0.160.0. The review's
 own reproduction is in
 `/Volumes/TOSHIBA Workspace/dev/artifacts/bukno/2026-10-02/review-pr2-6b095cd/`.
+
+The second review, of cb24b9f, reproduced four more, now rows C49 to C52:
+C49 by replay, C50 to C52 by the UI checks. Its reproduction is in
+`/Volumes/TOSHIBA Workspace/dev/artifacts/bukno/2026-10-02/review-pr2-round2-cb24b9f/`.

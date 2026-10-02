@@ -464,8 +464,15 @@ impl BuknoApp {
                         chat.extra.draft_saved = chat.composer.revision;
                     } else if chat.composer.revision <= revision {
                         // Typed before the saved draft arrived: number it after the
-                        // saved one, or storage would keep the older text.
-                        chat.composer.revision = revision + 1;
+                        // saved one, or storage would keep the older text. A send of
+                        // that same text moves with it, so acceptance still clears it.
+                        let rebased = revision + 1;
+                        if let Some(pending) = chat.pending_submit.as_mut()
+                            && pending.revision == chat.composer.revision
+                        {
+                            pending.revision = rebased;
+                        }
+                        chat.composer.revision = rebased;
                     }
                 },
                 now,

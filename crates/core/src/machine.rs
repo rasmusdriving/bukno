@@ -75,6 +75,9 @@ struct Run {
     /// The user stopped waiting for this unknown outcome.
     dismissed: bool,
     needs_reconcile: bool,
+    /// The outside check failed and the message was held. The only way on is
+    /// the user's Send now, which sends without that check.
+    check_failed: bool,
 }
 
 impl Run {
@@ -416,6 +419,7 @@ impl Machine {
                 wait: None,
                 dismissed: false,
                 needs_reconcile: false,
+                check_failed: false,
             },
         );
         let user_item = TranscriptItem {
@@ -668,6 +672,7 @@ impl Machine {
                 wait: None,
                 dismissed: false,
                 needs_reconcile: false,
+                check_failed: false,
             };
             let mut delivery_state = delivery;
             if delivery == DeliveryState::Queued {
@@ -1181,6 +1186,33 @@ impl Machine {
                     self.start_turn(message, generation, fx);
                 }
             }
+            EngineEventKind::OutsideCheckFailed { task, reason } => {
+                let Some(entry) = self.tasks.get_mut(&task) else {
+                    return;
+                };
+                if self.connections.get(&entry.info.provider) != Some(&generation) {
+                    return;
+                }
+                entry.outside_pending = None;
+                // A send waiting on this check is held: going ahead would hide
+                // anything that happened outside Bukno.
+                let waiting: Vec<(RunId, MessageId)> = self
+                    .deliveries
+                    .iter()
+                    .filter(|(_, d)| d.task == task && d.recorded && d.state == DeliveryState::AboutToSend)
+                    .map(|(id, d)| (d.run, *id))
+                    .collect();
+                let why = format!(
+                    "Bukno could not check whether this chat continued outside Bukno ({reason}). Send now sends it without that check."
+                );
+                for (run, message) in waiting {
+                    if let Some(record) = self.runs.get_mut(&run) {
+                        record.check_failed = true;
+                    }
+                    self.hold(run, message, &why, fx);
+                }
+                self.publish_chats(fx);
+            }
             EngineEventKind::Notice { run, text } => {
                 if let Some(record) = self.runs.get(&run) {
                     fx.push(Effect::Publish(ViewUpdate::Notice {
@@ -1366,8 +1398,10 @@ impl Machine {
         let Some(workspace) = self.workspaces.get(&task.info.workspace) else {
             return;
         };
-        // Missed turns from outside Bukno load before a send (section 6).
-        if task.info.session.is_some() && task.outside_checked != Some(generation) {
+        // Missed turns from outside Bukno load before a send (section 6),
+        // unless the check failed and the user chose to send anyway.
+        let unchecked = task.info.session.is_some() && task.outside_checked != Some(generation);
+        if unchecked && !run.check_failed {
             let (task_id, run_id) = (delivery.task, delivery.run);
             self.check_outside(task_id, true, fx);
             self.publish_wait(run_id, Some(WaitReason::Checking), fx);
@@ -1390,6 +1424,15 @@ impl Machine {
                 settings: run.settings.clone(),
             },
         ));
+        if unchecked {
+            fx.push(Effect::Publish(ViewUpdate::Notice {
+                task: task_id,
+                notice: Notice {
+                    text: "Sent without checking for messages from outside Bukno.".into(),
+                    tone: NoticeTone::Info,
+                },
+            }));
+        }
         fx.push(Effect::Persist(PersistRequest::DeliveryState { message, state: DeliveryState::Sent }));
         fx.push(Effect::Persist(PersistRequest::RunState { run: run_id, state: RunState::Starting }));
         fx.push(Effect::Publish(ViewUpdate::DeliveryChanged { task: task_id, message, state: DeliveryState::Sent }));

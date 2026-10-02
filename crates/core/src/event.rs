@@ -169,11 +169,17 @@ pub enum EngineEventKind {
     },
     /// Result of comparing the provider's history with what Bukno last saw.
     /// `items` holds turns Bukno missed (the chat continued outside Bukno);
-    /// empty when nothing changed or the history could not be read.
+    /// empty when nothing changed.
     OutsideChecked {
         task: TaskId,
         latest_turn: Option<String>,
         items: Vec<ImportedItem>,
+    },
+    /// The history could not be read, so nobody knows whether the chat
+    /// continued outside Bukno. Never treated as "nothing changed".
+    OutsideCheckFailed {
+        task: TaskId,
+        reason: String,
     },
     /// Something the user should know about a run, such as a request Bukno
     /// could not answer.

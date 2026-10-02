@@ -490,9 +490,8 @@ impl Supervisor {
                     run,
                     result: Reconciliation::Unavailable { reason: "Codex did not answer in time.".into() },
                 }),
-                Pending::Outside { task, .. } => {
-                    events.push(EngineEventKind::OutsideChecked { task, latest_turn: None, items: Vec::new() })
-                }
+                Pending::Outside { task, .. } => events
+                    .push(EngineEventKind::OutsideCheckFailed { task, reason: "Codex did not answer in time".into() }),
             }
         }
         for kind in events {
@@ -722,11 +721,14 @@ impl Supervisor {
                 self.emit(generation, EngineEventKind::Reconciled { run, result }).await;
             }
             Pending::Outside { task, latest } => {
-                let (latest_turn, items) = match result {
-                    Ok(value) => missed_turns(&value, latest.as_deref()),
-                    Err(_) => (None, Vec::new()),
+                let kind = match result {
+                    Ok(value) => {
+                        let (latest_turn, items) = missed_turns(&value, latest.as_deref());
+                        EngineEventKind::OutsideChecked { task, latest_turn, items }
+                    }
+                    Err(e) => EngineEventKind::OutsideCheckFailed { task, reason: readable_error(&e.message) },
                 };
-                self.emit(generation, EngineEventKind::OutsideChecked { task, latest_turn, items }).await;
+                self.emit(generation, kind).await;
             }
         }
     }

@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use bukno_core::decision::{DecisionKind, DecisionState, DecisionView};
-use egui::{Align2, Event, Id, Key, Rect, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use bukno_core::decision::{DecisionKind, DecisionState, DecisionView, Question};
+use egui::{Align2, Event, Id, Key, Pos2, Rect, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
 
 use super::icons::{self, Icon};
 use super::{focus_ring, kbd};
@@ -72,14 +72,27 @@ pub fn height(ui: &Ui, theme: &Theme, decision: &DecisionView, width: f32, code_
         h += galley.size().y.min(code_max) + 24.0 + 10.0;
     }
     if let DecisionKind::Question { questions } = &decision.kind {
-        for q in questions {
-            let galley =
-                ui.painter().layout_job(theme.job(q.text.clone(), &theme.text.t_ui, theme.color.text_primary, inner));
-            h += 18.0 + galley.size().y + 8.0 + if q.options.is_empty() || q.other { 70.0 } else { 40.0 };
-        }
+        h += questions_height(ui, theme, questions, inner);
     }
     h += 20.0 + 10.0; // reason or protection line
     h + 32.0 + PAD
+}
+
+/// Height of the questions, by the same rules [`draw_questions`] lays them out with.
+fn questions_height(ui: &Ui, theme: &Theme, questions: &[Question], inner: f32) -> f32 {
+    let mut h = 0.0;
+    for q in questions {
+        let galley =
+            ui.painter().layout_job(theme.job(q.text.clone(), &theme.text.t_ui, theme.color.text_primary, inner));
+        h += 18.0 + galley.size().y + 8.0;
+        if !q.options.is_empty() {
+            h += 30.0 + 10.0;
+        }
+        if q.options.is_empty() || q.other {
+            h += 70.0;
+        }
+    }
+    h
 }
 
 /// Draw the card in `rect` (use [`height`] with the same `code_max`).
@@ -159,56 +172,24 @@ pub fn show(
     }
 
     if let DecisionKind::Question { questions } = &decision.kind {
-        for q in questions {
-            ui.painter().text(
-                pos2(x, y),
-                Align2::LEFT_TOP,
-                &q.header,
-                theme.font(&theme.text.t_small),
-                c.text_tertiary,
+        let content = questions_height(ui, theme, questions, inner);
+        // A card capped to the window scrolls its questions; the answer actions stay below.
+        let natural = height(ui, theme, decision, rect.width(), code_max);
+        let region = (content - (natural - rect.height()).max(0.0)).max(0.0);
+        if region + 0.5 >= content {
+            draw_questions(ui, theme, id, pos2(x, y), inner, questions, answers, sending);
+        } else {
+            let area = Rect::from_min_size(pos2(x, y), vec2(inner, region));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
+            egui::ScrollArea::vertical().id_salt(id.with("questions")).auto_shrink([false, false]).show(
+                &mut child,
+                |ui| {
+                    let (space, _) = ui.allocate_exact_size(vec2(inner, content), Sense::hover());
+                    draw_questions(ui, theme, id, space.min, inner, questions, answers, sending);
+                },
             );
-            y += 18.0;
-            let galley = ui.painter().layout_job(theme.job(q.text.clone(), &theme.text.t_ui, c.text_primary, inner));
-            let gh = galley.size().y;
-            ui.painter().galley(pos2(x, y), galley, c.text_primary);
-            y += gh + 8.0;
-            let mut bx = x;
-            for option in &q.options {
-                let chosen = answers.get(&q.id) == Some(option);
-                let galley = ui.painter().layout_no_wrap(option.clone(), theme.font(&theme.text.t_ui), c.text_primary);
-                let w = galley.size().x + 20.0;
-                let b = Rect::from_min_size(pos2(bx, y), vec2(w, 30.0));
-                let r = ui.interact(b, id.with(("option", &q.id, option)), Sense::click());
-                r.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, !sending, chosen, option));
-                let fill = if chosen {
-                    c.surface_selected
-                } else if r.hovered() {
-                    c.surface_hover
-                } else {
-                    c.surface_raised
-                };
-                ui.painter().rect_filled(b, theme.radius.radius_md, fill);
-                ui.painter().galley(b.center() - galley.size() / 2.0, galley, c.text_primary);
-                focus_ring(ui, theme, &r, theme.radius.radius_md);
-                if r.clicked() && !sending {
-                    answers.insert(q.id.clone(), option.clone());
-                }
-                bx += w + 6.0;
-            }
-            if !q.options.is_empty() {
-                y += 30.0 + 10.0;
-            }
-            if q.options.is_empty() || q.other {
-                let field = Rect::from_min_size(pos2(x, y), vec2(inner, 60.0));
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
-                let text = answers.entry(q.id.clone()).or_default();
-                child.add_sized(
-                    field.size(),
-                    egui::TextEdit::multiline(text).id(id.with(("text", &q.id))).hint_text("Type an answer"),
-                );
-                y += 70.0;
-            }
         }
+        y += region.min(content);
     }
 
     let note = reason(&decision.kind).map(str::to_owned).unwrap_or_else(|| protection.to_owned());
@@ -273,4 +254,65 @@ pub fn show(
     }
     let _ = kbd;
     action
+}
+
+/// Draw the questions from `origin`, each with its choices and text field.
+#[allow(clippy::too_many_arguments)]
+fn draw_questions(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: Id,
+    origin: Pos2,
+    inner: f32,
+    questions: &[Question],
+    answers: &mut HashMap<String, String>,
+    sending: bool,
+) {
+    let c = &theme.color;
+    let x = origin.x;
+    let mut y = origin.y;
+    for q in questions {
+        ui.painter().text(pos2(x, y), Align2::LEFT_TOP, &q.header, theme.font(&theme.text.t_small), c.text_tertiary);
+        y += 18.0;
+        let galley = ui.painter().layout_job(theme.job(q.text.clone(), &theme.text.t_ui, c.text_primary, inner));
+        let gh = galley.size().y;
+        ui.painter().galley(pos2(x, y), galley, c.text_primary);
+        y += gh + 8.0;
+        let mut bx = x;
+        for option in &q.options {
+            let chosen = answers.get(&q.id) == Some(option);
+            let galley = ui.painter().layout_no_wrap(option.clone(), theme.font(&theme.text.t_ui), c.text_primary);
+            let w = galley.size().x + 20.0;
+            let b = Rect::from_min_size(pos2(bx, y), vec2(w, 30.0));
+            let r = ui.interact(b, id.with(("option", &q.id, option)), Sense::click());
+            r.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, !sending, chosen, option));
+            let fill = if chosen {
+                c.surface_selected
+            } else if r.hovered() {
+                c.surface_hover
+            } else {
+                c.surface_raised
+            };
+            ui.painter().rect_filled(b, theme.radius.radius_md, fill);
+            ui.painter().galley(b.center() - galley.size() / 2.0, galley, c.text_primary);
+            focus_ring(ui, theme, &r, theme.radius.radius_md);
+            if r.clicked() && !sending {
+                answers.insert(q.id.clone(), option.clone());
+            }
+            bx += w + 6.0;
+        }
+        if !q.options.is_empty() {
+            y += 30.0 + 10.0;
+        }
+        if q.options.is_empty() || q.other {
+            let field = Rect::from_min_size(pos2(x, y), vec2(inner, 60.0));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+            let text = answers.entry(q.id.clone()).or_default();
+            child.add_sized(
+                field.size(),
+                egui::TextEdit::multiline(text).id(id.with(("text", &q.id))).hint_text("Type an answer"),
+            );
+            y += 70.0;
+        }
+    }
 }

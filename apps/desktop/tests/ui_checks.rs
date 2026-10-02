@@ -1239,6 +1239,14 @@ fn review_short_window_layout() {
 //     that chat's draft.
 // C48 (P2) At the 640 x 480 minimum window an approval card was left out,
 //     so Allow once and Deny could not be reached.
+//
+// Second review pass (C49 is a replay):
+// C50 (P2) A message sent before the saved draft loaded stayed in the
+//     composer after it was accepted, so it could be sent twice.
+// C51 (P2) A question with choices and a text field was measured 40 points
+//     short, so its last field and the actions ran under the composer.
+// C52 (P2) Question cards taller than the window had no scrolling, so the
+//     first questions could not be reached.
 
 fn chat_summary(task: TaskId, title: &str) -> ChatSummary {
     ChatSummary {
@@ -1359,10 +1367,37 @@ fn review_empty_draft_keeps_its_revision() {
     c.app().flush_draft();
     let early = draft_saves(&c);
     assert_eq!(early.last(), Some(&(41, "Typed early".to_owned())));
+
+    // C50: sent before the saved draft arrives, the message still leaves the composer when accepted.
+    let other = TaskId(0x5b5e_0000_0000_0000_0050_0000_0000_0001);
+    c.send(ViewUpdate::Chats {
+        projects: vec![],
+        chats: vec![chat_summary(task, "Cleared draft"), chat_summary(other, "Sent early")],
+    });
+    c.app().select_chat(other);
+    c.type_in_composer("Sent before the draft loaded");
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    c.send(ViewUpdate::DraftLoaded { task: other, text: String::new(), revision: 40 });
+    c.step(2);
+    c.send(ViewUpdate::ItemUpserted(TranscriptItem {
+        id: ItemId(0x50),
+        task: other,
+        run: None,
+        kind: ItemKind::UserMessage,
+        text: "Sent before the draft loaded".into(),
+        meta: None,
+        completed: true,
+        revision: 1,
+    }));
+    c.step(2);
+    assert_eq!(c.app().composer.text, "", "the sent message is not left behind to send again");
+    assert!(c.app().composer.revision > 41, "the cleared composer is numbered after the saved draft");
     let result = json!({
         "status": "pass",
         "relaunch": { "loaded_revision": 40, "saved": saved.0, "saved_revision": saved.1 },
         "typed_before_load": { "saves": format!("{early:?}") },
+        "sent_before_load": { "composer_after_acceptance": "" },
     });
     std::fs::write(dir.join("result.json"), serde_json::to_string_pretty(&result).unwrap()).unwrap();
     c.finish(result);
@@ -1488,4 +1523,99 @@ fn review_approval_fits_smallest_window() {
     let answered = c.commands.try_iter().any(|cmd| matches!(cmd, UiCommand::Answer { .. }));
     assert!(answered, "Allow once sends an answer");
     c.finish(json!({ "status": "pass", "cases": seen, "answered": answered }));
+}
+
+fn question_card(task: TaskId, run: RunId, choices: bool) -> ViewUpdate {
+    let questions = (1..=3)
+        .map(|i| bukno_core::decision::Question {
+            id: format!("q{i}"),
+            header: format!("Question {i}"),
+            text: format!("Please answer question {i} before work continues."),
+            options: if choices { vec!["Choice A".into(), "Choice B".into()] } else { vec![] },
+            other: choices,
+        })
+        .collect();
+    ViewUpdate::Decisions {
+        task,
+        decisions: vec![DecisionView {
+            id: DecisionId(0x51),
+            task,
+            run,
+            generation: 1,
+            kind: DecisionKind::Question { questions },
+            state: DecisionState::Pending,
+        }],
+    }
+}
+
+/// The card's answer fields, top to bottom (the composer is a text field too).
+fn text_inputs(c: &Check) -> Vec<egui::Rect> {
+    let composer = composer_id().accesskit_id();
+    c.harness
+        .get_all_by_role(Role::MultilineTextInput)
+        .filter(|n| n.accesskit_node().locate().0 != composer)
+        .map(|n| n.rect())
+        .collect()
+}
+
+/// C51 and C52: question cards keep every field and both actions reachable,
+/// at full size and in the smallest window.
+#[test]
+fn review_question_cards_fit() {
+    let task = TaskId(0x5b5e_0000_0000_0000_0051_0000_0000_0001);
+    let run = RunId(0x51);
+    let mut seen = Vec::new();
+    for (name, size, choices) in [
+        ("regular-choices", [1440.0, 900.0], true),
+        ("minimum-choices", [640.0, 480.0], true),
+        ("minimum-free", [640.0, 480.0], false),
+    ] {
+        let mut c = Check::real(&format!("review-question-cards-{name}"), size);
+        c.send(ViewUpdate::Chats { projects: vec![], chats: vec![chat_summary(task, "Questions")] });
+        c.step(2);
+        c.app().select_chat(task);
+        c.send(ViewUpdate::RunStateChanged { task, run, state: RunState::WaitingForInput });
+        c.send(question_card(task, run, choices));
+        c.step(4);
+        let composer_top = c.harness.get_all_by_label("Stop").map(|n| n.rect().top()).fold(f32::INFINITY, f32::min);
+        let (height, width) = (size[1], size[0]);
+        let reachable = |r: egui::Rect| r.top() >= 0.0 && r.bottom() <= composer_top && r.right() <= width;
+        for label in ["Send answer", "Skip"] {
+            let rect = c.harness.get_by_label(label).rect();
+            assert!(reachable(rect), "{name}: {label} is on screen above the composer: {rect:?}");
+        }
+        c.picture(&format!("review-question-cards-{name}-01"));
+        let inputs = text_inputs(&c);
+        let shown = inputs.iter().filter(|r| reachable(**r)).count();
+        if name == "regular-choices" {
+            assert_eq!(shown, 3, "{name}: every field fits at full size: {inputs:?}");
+        } else {
+            // The questions scroll inside the card: the first is at the top, the last one scrolls in.
+            assert!(inputs.first().is_some_and(|r| reachable(*r)), "{name}: the first field shows: {inputs:?}");
+            let area = c.harness.get_by_label("Send answer").rect();
+            c.harness.event(Event::PointerMoved(Pos2::new(width / 2.0, area.top() - 40.0)));
+            c.harness.event(Event::MouseWheel {
+                unit: MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -2000.0),
+                phase: TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            c.step(20);
+            let inputs = text_inputs(&c);
+            assert!(
+                inputs.last().is_some_and(|r| r.top() >= 0.0 && r.bottom() <= height),
+                "{name}: the last field scrolls into view: {inputs:?}"
+            );
+            c.picture(&format!("review-question-cards-{name}-02-scrolled"));
+        }
+        seen.push(json!({ "case": name, "fields_on_screen_at_start": shown }));
+        c.finish(json!({ "status": "pass", "case": name, "fields_on_screen_at_start": shown }));
+    }
+    let dir = evidence_root().join("review-question-cards");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("result.json"),
+        serde_json::to_string_pretty(&json!({ "status": "pass", "cases": seen })).unwrap(),
+    )
+    .unwrap();
 }
