@@ -244,6 +244,7 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
     let trailing = if app.run.is_some() { WORKING_HEIGHT } else { 0.0 };
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(transcript_rect));
     let output = app.transcript.show(&mut child, &app.doc, &theme, trailing);
+    app.doc.frame_drawn();
     if let (Some(rect), Some(run)) = (output.trailing, &app.run) {
         let state = match run.state {
             RunState::WaitingForApproval | RunState::WaitingForInput => OrbState::Waiting,

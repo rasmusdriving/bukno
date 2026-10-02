@@ -864,6 +864,15 @@ fn streak_frame_rates() {
 //    character offsets, so a selected "bold" became "ld".
 // R5 (P2) At 480 points high the sidebar rows ran under the pinned footer.
 // R6 (P2) A long new-chat draft pushed Send below a short window.
+//
+// Second review pass:
+// R7 (P2) Inline code that joins lines (`first\nsecond`) mapped every
+//    character to one source position, so a selected "second" widened to
+//    "first second" on the next append.
+// R8 (P2) Finishing a table split one paragraph into several blocks, and a
+//    selection on the header became empty.
+// R9 (P2) Completed replies kept up to 32 source maps per block, so
+//    repeated replies grew retained memory (19.57 MiB for 40 replies).
 
 fn submits(c: &Check) -> Vec<String> {
     c.commands
@@ -950,39 +959,46 @@ fn review_ime_cancel_after_focus_loss() {
     c.finish(json!({ "status": "pass", "sent": sent[0] }));
 }
 
-/// R4: selections keep their text while streamed Markdown finishes:
-/// emphasis, inline code and a link.
+/// R4, R7, R8: selections keep their text while streamed Markdown
+/// finishes: emphasis, inline code, a link, inline code across a line
+/// break, and a paragraph that becomes a table.
 #[test]
 fn review_selection_survives_markdown_completion() {
     let mut c = Check::new("review-markdown-selection", "short", [1440.0, 900.0], true);
     c.step(2);
     c.send(ViewUpdate::RunStateChanged { task: synthetic::TASK, run: STREAM_RUN, state: RunState::Running });
-    let reply = |c: &Check, text: &str, revision: u64| {
-        c.send(ViewUpdate::ItemUpserted(TranscriptItem {
-            id: STREAM_ITEM,
-            task: synthetic::TASK,
-            run: Some(STREAM_RUN),
-            kind: ItemKind::AgentMessage { provider: Provider::Codex },
-            text: text.into(),
-            meta: None,
-            completed: false,
-            revision,
-        }));
-    };
-    // Each case: the unfinished source, the word to select (char range in
-    // its rendered text), and the finished source.
+    // Each case uses its own reply: the unfinished source, the word to
+    // select in its rendered text, and the source after the next append.
     let cases = [
-        ("prefix **bold", (9, 13), "prefix **bold** after", "bold"),
-        ("use `cod", (5, 8), "use `code` now", "cod"),
-        ("see [docs](htt", (5, 9), "see [docs](https://example.org) then", "docs"),
+        ("prefix **bold", "bold", "prefix **bold** after"),
+        ("use `cod", "cod", "use `code` now"),
+        ("see [docs](htt", "docs", "see [docs](https://example.org) then"),
+        ("use `first\nsecond`", "second", "use `first\nsecond` more"),
+        ("intro\n| Key | Value |\n| --", "Value", "intro\n| Key | Value |\n| -- | -- |\n| a | b |"),
     ];
     let mut observed = Vec::new();
-    for (n, (unfinished, (from, to), finished, word)) in cases.into_iter().enumerate() {
-        let base = n as u64 * 10;
-        reply(&c, unfinished, base + 1);
+    for (n, (unfinished, word, finished)) in cases.into_iter().enumerate() {
+        let reply = |c: &Check, text: &str, revision: u64| {
+            c.send(ViewUpdate::ItemUpserted(TranscriptItem {
+                id: ItemId(STREAM_ITEM.0 + n as u128),
+                task: synthetic::TASK,
+                run: Some(STREAM_RUN),
+                kind: ItemKind::AgentMessage { provider: Provider::Codex },
+                text: text.into(),
+                meta: None,
+                completed: false,
+                revision,
+            }));
+        };
+        reply(&c, unfinished, 1);
         c.step(3);
+        let (block, from) = {
+            let doc = &c.harness.state().doc;
+            let block = doc.blocks.iter().rev().find(|b| b.text.contains(word)).unwrap();
+            (block.id, block.text[..block.text.find(word).unwrap()].chars().count())
+        };
+        let to = from + word.chars().count();
         // Select the word with the mouse, as a person would.
-        let block = c.app().doc.blocks.last().unwrap().id;
         let start = c.screen(TextPos { block, offset: from }).unwrap();
         let end = c.screen(TextPos { block, offset: to }).unwrap();
         c.harness.event(Event::PointerMoved(start));
@@ -1004,16 +1020,102 @@ fn review_selection_survives_markdown_completion() {
         c.step(1);
         let before = c.selection().unwrap().text(&c.harness.state().doc);
         assert_eq!(before, word, "selected the unfinished word");
-        reply(&c, finished, base + 2);
+        reply(&c, finished, 2);
         c.step(3);
         let after = c.selection().unwrap().text(&c.harness.state().doc);
+        let blocks: Vec<String> = {
+            let doc = &c.harness.state().doc;
+            let message = &doc.messages[doc.messages.len() - 1];
+            doc.blocks[message.first_block..message.first_block + message.block_count]
+                .iter()
+                .map(|b| b.text.clone())
+                .collect()
+        };
         let copied = c.copy();
-        assert_eq!(after, word, "the selection keeps its text when {unfinished:?} finishes");
+        assert_eq!(after, word, "the selection keeps its text when {unfinished:?} finishes, blocks {blocks:?}");
         assert_eq!(copied.as_deref(), Some(word));
-        observed.push(json!({ "unfinished": unfinished, "finished": finished, "selected_before": before, "selected_after": after }));
+        observed.push(json!({
+            "unfinished": unfinished,
+            "finished": finished,
+            "selected_before": before,
+            "selected_after": after,
+            "copied": copied,
+            "blocks_after": blocks,
+        }));
     }
     c.shot("review-markdown-selection");
     c.finish(json!({ "status": "pass", "cases": observed }));
+}
+
+/// R9: replies streamed in many revisions release their source maps once
+/// they complete and are drawn, so repeated replies do not grow memory. A
+/// selection made during streaming still lands on the final text.
+#[test]
+fn review_repeated_replies_release_source_maps() {
+    const REPLIES: u128 = 40;
+    const REVISIONS: u64 = 64;
+    let mut c = Check::new("review-repeated-replies", "empty", [1440.0, 900.0], true);
+    c.app().view = bukno_desktop::app::View::Chat;
+    c.step(2);
+    let chunk = "åäö ordinary text for a streamed reply. ".repeat(2);
+    let mut peak = 0;
+    let mut after_each = Vec::new();
+    for n in 0..REPLIES {
+        let id = ItemId(STREAM_ITEM.0 + 100 + n);
+        let mut text = String::new();
+        for revision in 1..=REVISIONS + 1 {
+            let completed = revision > REVISIONS;
+            if completed {
+                text.push_str("Done **here**.");
+            } else {
+                text.push_str(&chunk);
+            }
+            c.send(ViewUpdate::ItemUpserted(TranscriptItem {
+                id,
+                task: synthetic::TASK,
+                run: Some(STREAM_RUN),
+                kind: ItemKind::AgentMessage { provider: Provider::Codex },
+                text: text.clone(),
+                meta: None,
+                completed,
+                revision,
+            }));
+            c.step(1);
+            peak = peak.max(c.harness.state().doc.source_map_bytes());
+            if n == REPLIES - 1 && revision == REVISIONS {
+                // Select the last "reply" while it still streams; the text ends "reply.".
+                let block = c.harness.state().doc.blocks.last().unwrap();
+                let (id, end) = (block.id, block.chars);
+                c.app().transcript.selection = Some(Selection {
+                    anchor: TextPos { block: id, offset: end - 6 },
+                    focus: TextPos { block: id, offset: end - 1 },
+                });
+            }
+        }
+        c.step(1);
+        let doc = &c.harness.state().doc;
+        after_each.push(
+            json!({ "reply": n + 1, "source_map_bytes": doc.source_map_bytes(), "tracked": doc.tracked_messages() }),
+        );
+    }
+    let doc = &c.harness.state().doc;
+    let retained = doc.source_map_bytes();
+    let tracked = doc.tracked_messages();
+    let chars: usize = doc.blocks.iter().map(|b| b.chars).sum();
+    let selected = c.selection().unwrap().text(doc);
+    assert_eq!(retained, 0, "completed replies keep no source maps");
+    assert_eq!(tracked, 0);
+    assert_eq!(selected, "reply", "a selection made while streaming keeps its text when the reply completes");
+    c.finish(json!({
+        "status": "pass",
+        "workload": "40 replies, each streamed in 64 revisions with one frame per revision, then completed",
+        "rendered_characters": chars,
+        "peak_source_map_bytes_while_streaming": peak,
+        "retained_source_map_bytes_after_completion": retained,
+        "messages_still_tracking_maps": tracked,
+        "selection_after_completion": selected,
+        "per_reply": after_each,
+    }));
 }
 
 /// R5 and R6: at the declared minimum height nothing overlaps or leaves the

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use egui::text::{CCursor, CharIndex};
 use egui::{Align2, Event, Id, Key, Modifiers, Pos2, Rect, Response, Sense, Ui, pos2, vec2};
 
-use self::document::{BlockId, BlockKind, Document, Role};
+use self::document::{Bias, BlockId, BlockKind, Document, Role};
 use self::layout::{Layout, bottom_padding};
 use self::selection::{Selection, TextPos, next_word, pos_at, previous_word, resolve, word_at};
 use crate::components::icons;
@@ -64,9 +64,6 @@ pub struct TranscriptView {
     viewport_height: f32,
     last_rect: Rect,
     last_column: Rect,
-    /// Revision of each streaming block as last drawn. A selection made on
-    /// that text is remapped through the Markdown source when it changes.
-    drawn_revisions: HashMap<BlockId, u64>,
     pub stats: FrameStats,
     /// Last text this widget copied, kept for UI checks.
     pub last_copied: Option<String>,
@@ -89,7 +86,6 @@ impl Default for TranscriptView {
             viewport_height: 0.0,
             last_rect: Rect::NOTHING,
             last_column: Rect::NOTHING,
-            drawn_revisions: HashMap::new(),
             stats: FrameStats::default(),
             last_copied: None,
         }
@@ -157,16 +153,19 @@ impl TranscriptView {
         self.last_column = column;
         self.layout.sync(doc, theme, column.width(), ctx.pixels_per_point());
         // Keep the selection on the same source text when streaming Markdown
-        // re-renders its block (an unfinished `**bold` becoming bold).
+        // re-renders its message (an unfinished `**bold` becoming bold, or a
+        // paragraph becoming a table).
         if let Some(sel) = self.selection.as_mut() {
-            for pos in [&mut sel.anchor, &mut sel.focus] {
-                if let Some(&drawn) = self.drawn_revisions.get(&pos.block) {
-                    pos.offset = doc.remap(pos.block, drawn, pos.offset);
-                }
-            }
+            let (anchor, focus) = if sel.is_empty() {
+                (Bias::Forward, Bias::Forward)
+            } else if doc.precedes(sel.anchor, sel.focus) {
+                (Bias::Forward, Bias::Backward)
+            } else {
+                (Bias::Backward, Bias::Forward)
+            };
+            sel.anchor = doc.relocate(sel.anchor, anchor);
+            sel.focus = doc.relocate(sel.focus, focus);
         }
-        self.drawn_revisions.clear();
-        self.drawn_revisions.extend(doc.tracked_revisions());
         if let Some(sel) = self.selection
             && sel.ordered(doc).is_none()
         {

@@ -12,6 +12,8 @@ use bukno_core::ids::ItemId;
 use bukno_core::message::{ItemKind, Provider, TranscriptItem};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+use super::selection::TextPos;
+
 /// A block's identity: its message plus its position inside that message.
 /// Stable while the message streams, because blocks only grow at the end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -83,19 +85,41 @@ pub struct Document {
     by_item: HashMap<ItemId, usize>,
     /// Increases whenever any block changes; the layout uses it to notice work.
     pub revision: u64,
-    /// Recent source maps of blocks in messages that are still streaming,
-    /// by block revision. Used to keep a selection on the same source text
-    /// when finishing Markdown changes the rendered text (`**bold` becoming
-    /// `bold`). Completed history keeps none.
-    source_maps: HashMap<BlockId, VecDeque<(u64, SourceMap)>>,
+    /// Source maps of messages that are streaming, or that completed since
+    /// the transcript was last drawn. A selection is made on the text as
+    /// drawn, so its ends are moved through the Markdown source to the
+    /// current blocks (`**bold` becoming `bold`, a paragraph becoming a
+    /// table). Completed history keeps none.
+    tracked: HashMap<ItemId, Tracked>,
+    /// Completed messages whose maps wait for the next drawn frame, oldest first.
+    settling: VecDeque<ItemId>,
 }
 
-/// Byte offset in the message source of each plain character, plus one end position.
-type SourceMap = Arc<[u32]>;
+/// For each block of a message, the byte offset in the message source of
+/// each plain character, plus one end position.
+type Maps = Arc<[Box<[u32]>]>;
 
-/// Source-map revisions kept per streaming block. Several revisions can
-/// arrive between two frames; the view remaps at least once a frame.
-const MAP_HISTORY: usize = 32;
+struct Tracked {
+    /// Message revision of `maps`.
+    revision: u64,
+    maps: Maps,
+    /// The maps as last drawn, if the message has been drawn.
+    drawn: Option<(u64, Maps)>,
+}
+
+/// Completed messages that may wait for a drawn frame before their maps
+/// are dropped. Bounds memory even when nothing is drawn.
+const SETTLING_LIMIT: usize = 4;
+
+/// Which character a selection end belongs to when its source position
+/// falls between blocks or between characters that map to one position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bias {
+    /// The start of a selection, or a caret: the next character.
+    Forward,
+    /// The end of a selection: after the previous character.
+    Backward,
+}
 
 impl Document {
     pub fn index_of(&self, id: BlockId) -> Option<usize> {
@@ -112,7 +136,8 @@ impl Document {
         self.blocks.clear();
         self.by_block.clear();
         self.by_item.clear();
-        self.source_maps.clear();
+        self.tracked.clear();
+        self.settling.clear();
         for item in items {
             self.append(item);
         }
@@ -141,6 +166,7 @@ impl Document {
         let old_count = message.block_count;
         message.block_count = parsed.len();
 
+        let mut maps = Vec::with_capacity(parsed.len());
         let new_blocks: Vec<Block> = parsed
             .into_iter()
             .enumerate()
@@ -154,17 +180,26 @@ impl Document {
                     None => 1,
                 };
                 if keep_maps {
-                    let history = self.source_maps.entry(id).or_default();
-                    if history.back().is_none_or(|(r, _)| *r != revision) {
-                        history.push_back((revision, map.into()));
-                        if history.len() > MAP_HISTORY {
-                            history.pop_front();
-                        }
-                    }
+                    maps.push(map.into_boxed_slice());
                 }
                 Block { id, revision, chars: text.chars().count(), kind, text, spans, message: index }
             })
             .collect();
+        if keep_maps {
+            let tracked =
+                self.tracked.entry(item.id).or_insert(Tracked { revision: 0, maps: Maps::default(), drawn: None });
+            tracked.revision = item.revision;
+            tracked.maps = maps.into();
+            if item.completed && !self.settling.contains(&item.id) {
+                self.settling.push_back(item.id);
+                while self.settling.len() > SETTLING_LIMIT {
+                    let oldest = self.settling.pop_front().unwrap();
+                    self.tracked.remove(&oldest);
+                }
+            }
+        } else {
+            self.tracked.remove(&item.id);
+        }
         let new_count = new_blocks.len();
         self.blocks.splice(first..first + old_count, new_blocks);
         if new_count != old_count {
@@ -183,13 +218,17 @@ impl Document {
         let first = self.blocks.len();
         let parsed = parse(item);
         let count = parsed.len();
+        let mut maps = Vec::new();
         for (ordinal, (kind, text, spans, map)) in parsed.into_iter().enumerate() {
             let id = BlockId { item: item.id, ordinal: ordinal as u32 };
             if !item.completed {
-                self.source_maps.entry(id).or_default().push_back((1, map.into()));
+                maps.push(map.into_boxed_slice());
             }
             self.by_block.insert(id, self.blocks.len());
             self.blocks.push(Block { id, revision: 1, chars: text.chars().count(), kind, text, spans, message: index });
+        }
+        if !item.completed {
+            self.tracked.insert(item.id, Tracked { revision: item.revision, maps: maps.into(), drawn: None });
         }
         self.by_item.insert(item.id, index);
         self.messages.push(Message {
@@ -207,33 +246,87 @@ impl Document {
         });
     }
 
-    /// Current revisions of every block that keeps source maps.
-    pub fn tracked_revisions(&self) -> impl Iterator<Item = (BlockId, u64)> + '_ {
-        self.source_maps.keys().filter_map(|id| Some((*id, self.blocks[self.index_of(*id)?].revision)))
-    }
-
-    /// True when the block keeps source maps (its message is streaming or
-    /// streamed in this session).
-    pub fn tracks_source(&self, id: BlockId) -> bool {
-        self.source_maps.contains_key(&id)
-    }
-
-    /// Move a character offset taken at block revision `from` to the same
-    /// source position in the block's current text. Offsets that cannot be
-    /// mapped are clamped.
-    pub fn remap(&self, id: BlockId, from: u64, offset: usize) -> usize {
-        let Some(index) = self.index_of(id) else { return offset };
-        let block = &self.blocks[index];
-        if from == block.revision {
-            return offset.min(block.chars);
+    /// Call after the transcript has been drawn. The drawn maps become the
+    /// current ones, and messages that completed are released: the view has
+    /// moved any selection onto their final text.
+    pub fn frame_drawn(&mut self) {
+        for item in self.settling.drain(..) {
+            self.tracked.remove(&item);
         }
-        let Some(history) = self.source_maps.get(&id) else { return offset.min(block.chars) };
-        let find = |rev: u64| history.iter().rev().find(|(r, _)| *r == rev).map(|(_, m)| m.clone());
-        let (Some(old), Some(new)) = (find(from), find(block.revision)) else {
-            return offset.min(block.chars);
+        for tracked in self.tracked.values_mut() {
+            if tracked.drawn.as_ref().is_none_or(|(revision, _)| *revision != tracked.revision) {
+                tracked.drawn = Some((tracked.revision, tracked.maps.clone()));
+            }
+        }
+    }
+
+    /// Bytes held in source maps, for the memory check.
+    pub fn source_map_bytes(&self) -> usize {
+        let size = |maps: &Maps| maps.iter().map(|m| m.len() * size_of::<u32>()).sum::<usize>();
+        self.tracked
+            .values()
+            .map(|t| size(&t.maps) + t.drawn.as_ref().filter(|(r, _)| *r != t.revision).map_or(0, |(_, m)| size(m)))
+            .sum()
+    }
+
+    /// Messages that currently keep source maps.
+    pub fn tracked_messages(&self) -> usize {
+        self.tracked.len()
+    }
+
+    /// Move a position taken on the text as last drawn to the same source
+    /// text in the current blocks, which may be split or merged differently.
+    /// Positions in messages that have not changed since are returned as they are.
+    pub fn relocate(&self, pos: TextPos, bias: Bias) -> TextPos {
+        let item = pos.block.item;
+        let Some(tracked) = self.tracked.get(&item) else { return pos };
+        let Some((drawn, old)) = &tracked.drawn else { return pos };
+        if *drawn == tracked.revision {
+            return pos;
+        }
+        let Some(map) = old.get(pos.block.ordinal as usize) else { return pos };
+        let chars = map.len() - 1;
+        let k = pos.offset.min(chars);
+        let source = match bias {
+            Bias::Forward => map[k],
+            Bias::Backward if k > 0 => map[k - 1] + 1,
+            Bias::Backward => map[0],
         };
-        let source = old[offset.min(old.len() - 1)];
-        new.partition_point(|&s| s < source).min(block.chars)
+        let block = |ordinal: usize| BlockId { item, ordinal: ordinal as u32 };
+        let maps = &tracked.maps;
+        match bias {
+            // The first character at or after the source position.
+            Bias::Forward => {
+                for (ordinal, m) in maps.iter().enumerate() {
+                    let n = m.len() - 1;
+                    let i = m[..n].partition_point(|&s| s < source);
+                    if i < n {
+                        return TextPos { block: block(ordinal), offset: i };
+                    }
+                }
+                let last = maps.len().saturating_sub(1);
+                TextPos { block: block(last), offset: maps.get(last).map_or(0, |m| m.len() - 1) }
+            }
+            // Just after the last character before the source position.
+            Bias::Backward => {
+                for (ordinal, m) in maps.iter().enumerate().rev() {
+                    let n = m.len() - 1;
+                    let i = m[..n].partition_point(|&s| s < source);
+                    if i > 0 {
+                        return TextPos { block: block(ordinal), offset: i };
+                    }
+                }
+                TextPos { block: block(0), offset: 0 }
+            }
+        }
+    }
+
+    /// True when `a` comes before or at `b`, using the blocks as drawn.
+    pub fn precedes(&self, a: TextPos, b: TextPos) -> bool {
+        if a.block.item == b.block.item {
+            return (a.block.ordinal, a.offset) <= (b.block.ordinal, b.offset);
+        }
+        self.by_item.get(&a.block.item) <= self.by_item.get(&b.block.item)
     }
 
     fn reindex_from(&mut self, from: usize) {
@@ -304,23 +397,33 @@ impl BlockBuilder {
         }
     }
 
-    /// Append rendered text that came from `range` of the source. When the
-    /// rendered text matches the source exactly each character maps to its
-    /// own position; otherwise (escapes, entities) all map to the start.
+    /// Append rendered text that came from `range` of the source. Each
+    /// character maps to its own source position. Where the rendering differs
+    /// from the source (escapes, entities, code spans that join lines), each
+    /// character maps to the next source character that renders the same.
     fn push(&mut self, rendered: &str, source: &str, range: Range<usize>) {
         self.begin(BlockKind::Paragraph);
-        let exact = source.get(range.clone()) == Some(rendered);
-        let base = source.get(range.clone()).and_then(|s| s.find(rendered)).filter(|_| !exact).map(|i| range.start + i);
-        for (b, ch) in rendered.char_indices() {
-            self.text.push(ch);
-            let at = if exact {
-                range.start + b
-            } else if let Some(base) = base {
-                base + b
-            } else {
-                range.start
-            };
-            self.map.push(at as u32);
+        let slice = source.get(range.clone()).unwrap_or("");
+        if slice == rendered {
+            for (b, ch) in rendered.char_indices() {
+                self.text.push(ch);
+                self.map.push((range.start + b) as u32);
+            }
+        } else {
+            let mut cursor = 0;
+            for ch in rendered.chars() {
+                let found = slice[cursor..].char_indices().find(|&(_, s)| s == ch || (ch == ' ' && s == '\n'));
+                let at = match found {
+                    Some((i, s)) => {
+                        let at = cursor + i;
+                        cursor = at + s.len_utf8();
+                        at
+                    }
+                    None => cursor,
+                };
+                self.text.push(ch);
+                self.map.push((range.start + at) as u32);
+            }
         }
         self.end = self.end.max(range.end as u32);
     }
