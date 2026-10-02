@@ -404,6 +404,8 @@ impl BlockBuilder {
     fn push(&mut self, rendered: &str, source: &str, range: Range<usize>) {
         self.begin(BlockKind::Paragraph);
         let slice = source.get(range.clone()).unwrap_or("");
+        // Reserve the whole piece, so retained text does not keep doubling slack.
+        self.text.reserve(rendered.len());
         if slice == rendered {
             for (b, ch) in rendered.char_indices() {
                 self.text.push(ch);
