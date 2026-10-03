@@ -176,18 +176,17 @@ impl ThreadState {
     }
 
     fn upsert(&mut self, item: TurnItem) -> bool {
-        if item.type_name == "run_interrupt_request"
-            && let Some(run) = &item.run_id
-        {
-            self.interrupt_request_runs.insert(run.clone());
-        }
+        // A new interrupt request can make a loaded result visible again, even
+        // when the request itself is outside the loaded window.
+        let new_request = item.type_name == "run_interrupt_request"
+            && item.run_id.as_ref().is_some_and(|run| self.interrupt_request_runs.insert(run.clone()));
         let index = self.rows.iter().position(|r| r.local && r.source_item_id == item.id);
         if index.is_none() && self.has_more_history {
             // A row older than the loaded window: its history page brings it.
             let older_than_snapshot = self.latest_local_turn_ordinal.is_some_and(|latest| item.ordinal <= latest);
             let older_than_window = self.oldest_local_ordinal().is_some_and(|oldest| item.ordinal < oldest);
             if older_than_snapshot || older_than_window {
-                return false;
+                return new_request && self.changed();
             }
         }
         if let Some(index) = index

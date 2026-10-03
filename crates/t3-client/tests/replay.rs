@@ -266,3 +266,28 @@ fn an_interrupt_request_outside_the_loaded_window_keeps_its_result_visible() {
     assert_eq!(thread.rows.len(), 1);
     assert_eq!(thread.visible_rows().len(), 1, "the request outside the window still counts");
 }
+
+#[test]
+fn a_live_interrupt_request_outside_the_window_republishes_the_chat() {
+    let mut thread = ThreadState::new("t1");
+    thread.apply(
+        ThreadItem::decode(&json!({
+            "kind": "snapshot", "snapshotSequence": 10, "hasMoreHistory": true, "historyCursor": "c1",
+            "latestLocalTurnOrdinal": 5,
+            "projection": {
+                "thread": {"title": "T"}, "runs": [],
+                "attempts": [{"id": "a1", "runId": "r1", "rootNodeId": "n1", "status": "superseded"}],
+                "turnItems": [], "visibleTurnItems": [{"position": 0, "visibility": "local", "sourceThreadId": "t1",
+                    "sourceItemId": "i1", "item": item("i1", "run_interrupt_result", 5, "n1")}]
+            }
+        }))
+        .unwrap(),
+    );
+    assert_eq!(thread.visible_rows().len(), 0);
+    let before = thread.revision;
+    // The request is older than the loaded window, so its row is not added,
+    // but the chat must still publish: the result is now visible.
+    assert!(thread.apply(event(11, "turn-item.updated", item("i0", "run_interrupt_request", 0, "n0"))));
+    assert!(thread.revision != before);
+    assert_eq!(thread.visible_rows().len(), 1);
+}
