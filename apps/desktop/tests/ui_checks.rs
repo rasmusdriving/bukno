@@ -68,6 +68,12 @@ fn evidence_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ui-evidence"))
 }
 
+/// SQLite and other runtime files stay on the internal build drive. Only
+/// reports and rendered evidence may go to the shared artifact directory.
+fn runtime_root(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("bukno-ui-{}", std::process::id())).join(name)
+}
+
 impl Check {
     fn new(name: &str, scenario: &str, size: [f32; 2], reduce_motion: bool) -> Self {
         let scenario = Scenario::named(scenario).expect("scenario");
@@ -75,8 +81,8 @@ impl Check {
         let (cmd_tx, commands) = mpsc::channel();
         let dir = evidence_root().join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        let state = dir.join("state");
-        let work = dir.join("work");
+        let state = runtime_root(name).join("state");
+        let work = runtime_root(name).join("work");
         let paths = AppPaths { state_dir: state, work_dir: Some(work), overridden: true };
         let history = scenario.history();
         let harness = Harness::builder()
@@ -103,9 +109,11 @@ impl Check {
         let (events, rx) = mpsc::channel();
         let (cmd_tx, commands) = mpsc::channel();
         let dir = evidence_root().join(name);
-        let work = dir.join("work");
+        std::fs::create_dir_all(&dir).unwrap();
+        let work = runtime_root(name).join("work");
         std::fs::create_dir_all(&work).unwrap();
-        let paths = AppPaths { state_dir: dir.join("state"), work_dir: Some(work.clone()), overridden: true };
+        let paths =
+            AppPaths { state_dir: runtime_root(name).join("state"), work_dir: Some(work.clone()), overridden: true };
         let harness = Harness::builder()
             .with_size(Vec2::from(size))
             .with_pixels_per_point(1.0)
@@ -278,8 +286,13 @@ impl Check {
     fn shot(&mut self, name: &str) {
         let image = self.harness.render().expect("render");
         image.save(self.dir.join(format!("{name}.png"))).unwrap();
-        let options =
-            SnapshotOptions::new().output_path(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots"));
+        let mut references = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots");
+        // Linux uses Ctrl labels and Vulkan rather than the Mac/Metal reference.
+        // Keep its reviewed images separate, without replacing Mac snapshots.
+        if cfg!(target_os = "linux") {
+            references = references.join("linux");
+        }
+        let options = SnapshotOptions::new().output_path(references);
         if let Err(err) = self.harness.try_snapshot_options(name, &options) {
             // Snapshot drift is reported in the evidence, not hidden.
             self.log.push(json!({ "snapshot": name, "status": "differs", "detail": err.to_string() }));
@@ -1299,7 +1312,9 @@ fn frames_until(app: &mut BuknoApp, ctx: &egui::Context, events: Vec<Event>, unt
 fn review_empty_draft_keeps_its_revision() {
     let dir = evidence_root().join("review-draft-revision");
     let _ = std::fs::remove_dir_all(&dir);
-    let (state, work) = (dir.join("state"), dir.join("work"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let runtime = runtime_root("review-draft-revision");
+    let (state, work) = (runtime.join("state"), runtime.join("work"));
     std::fs::create_dir_all(&work).unwrap();
     let task = TaskId(0x5b5e_0000_0000_0000_0046_0000_0000_0001);
     let workspace = WorkspaceInfo {
