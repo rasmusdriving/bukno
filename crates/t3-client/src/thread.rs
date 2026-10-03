@@ -9,8 +9,17 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::model::{HistoryPage, ProjectedItem, ThreadEvent, ThreadItem, TurnItem, TurnKind};
+use crate::model::{HistoryPage, ProjectedItem, RunAttempt, ThreadEvent, ThreadItem, TurnItem, TurnKind};
+
+/// Revisions come from one counter for the whole process, so a chat that is
+/// reloaded or reopened never repeats a revision a view has already seen.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
+}
 use crate::shell::StreamCounts;
 
 /// One timeline row. `revision` changes whenever the row's item changes, so
@@ -27,9 +36,13 @@ pub struct Row {
 #[derive(Clone, Debug, Default)]
 pub struct ThreadState {
     pub thread_id: String,
+    /// Identifies this load of the chat. Replies to requests made for an
+    /// earlier load (such as a history page) are discarded.
+    pub incarnation: u64,
     pub title: String,
     pub rows: Vec<Arc<Row>>,
     runs: HashMap<String, String>,
+    attempts: HashMap<String, RunAttempt>,
     pub last_sequence: Option<u64>,
     /// True after the catch-up marker on the current subscription.
     pub synchronized: bool,
@@ -40,14 +53,18 @@ pub struct ThreadState {
     pub removed: bool,
     pub counts: StreamCounts,
     pub unknown_event_types: BTreeSet<String>,
-    /// Increases on every change to what is shown.
+    /// Changes on every change to what is shown; unique across reloads.
     pub revision: u64,
-    next_row_revision: u64,
 }
 
 impl ThreadState {
     pub fn new(thread_id: &str) -> Self {
-        Self { thread_id: thread_id.to_owned(), ..Self::default() }
+        Self {
+            thread_id: thread_id.to_owned(),
+            incarnation: next_revision(),
+            revision: next_revision(),
+            ..Self::default()
+        }
     }
 
     /// Whether any data has arrived yet.
@@ -60,18 +77,17 @@ impl ThreadState {
     }
 
     fn row(&mut self, item: ProjectedItem) -> Arc<Row> {
-        self.next_row_revision += 1;
         Arc::new(Row {
             local: item.is_local(),
             source_thread_id: item.source_thread_id,
             source_item_id: item.source_item_id,
             item: item.item,
-            revision: self.next_row_revision,
+            revision: next_revision(),
         })
     }
 
     fn changed(&mut self) -> bool {
-        self.revision += 1;
+        self.revision = next_revision();
         true
     }
 
@@ -86,6 +102,7 @@ impl ThreadState {
                 self.counts.snapshots += 1;
                 self.title = snapshot.title;
                 self.runs = snapshot.runs.into_iter().map(|r| (r.id, r.status)).collect();
+                self.attempts = snapshot.attempts.into_iter().map(|a| (a.id.clone(), a)).collect();
                 self.rows = snapshot.items.into_iter().map(|i| self.row(i)).collect();
                 self.history_cursor = snapshot.history_cursor;
                 self.has_more_history = snapshot.has_more_history;
@@ -112,9 +129,17 @@ impl ThreadState {
                 match *event {
                     ThreadEvent::TurnItem(item) => self.upsert(item),
                     ThreadEvent::Run(run) => {
+                        // Rows can hide, and the working state can change.
+                        let working = self.working();
                         let affects_rows = matches!(run.status.as_str(), "rolled_back" | "cancelled");
                         self.runs.insert(run.id, run.status);
-                        affects_rows && self.changed()
+                        (affects_rows || working != self.working()) && self.changed()
+                    }
+                    ThreadEvent::Attempt(attempt) => {
+                        let was = self.attempts.get(&attempt.id).map(|a| a.status == "superseded");
+                        let now = attempt.status == "superseded";
+                        self.attempts.insert(attempt.id.clone(), attempt);
+                        (was != Some(now) && (now || was == Some(true))) && self.changed()
                     }
                     ThreadEvent::Thread { title, deleted } => {
                         if deleted {
@@ -200,17 +225,42 @@ impl ThreadState {
         self.changed()
     }
 
-    /// Rows to show, without those T3 hides: items of rolled-back runs, and
-    /// queued messages whose run was cancelled before it reached the provider.
+    /// Rows to show, without those T3 hides (`shared/src/orchestrationV2Timeline.ts`):
+    /// items of rolled-back runs, queued messages whose run was cancelled
+    /// before it reached the provider, and the interrupt result of a
+    /// superseded attempt when its run has no interrupt request.
     pub fn visible_rows(&self) -> Vec<Arc<Row>> {
+        let superseded: HashSet<(&str, &str)> = self
+            .attempts
+            .values()
+            .filter(|a| a.status == "superseded")
+            .map(|a| (a.run_id.as_str(), a.root_node_id.as_str()))
+            .collect();
+        let interrupt_requests: HashSet<&str> = self
+            .rows
+            .iter()
+            .filter(|r| r.item.type_name == "run_interrupt_request")
+            .filter_map(|r| r.item.run_id.as_deref())
+            .collect();
         self.rows
             .iter()
             .filter(|row| {
-                let run = row.item.run_id.as_ref().and_then(|id| self.runs.get(id)).map(String::as_str);
+                let item = &row.item;
+                let run = item.run_id.as_ref().and_then(|id| self.runs.get(id)).map(String::as_str);
                 if run == Some("rolled_back") {
                     return false;
                 }
-                !(matches!(row.item.kind, TurnKind::UserMessage { queued: true, .. }) && run == Some("cancelled"))
+                if matches!(item.kind, TurnKind::UserMessage { queued: true, .. }) && run == Some("cancelled") {
+                    return false;
+                }
+                let superseded_interrupt = item.type_name == "run_interrupt_result"
+                    && match (item.run_id.as_deref(), item.node_id.as_deref()) {
+                        (Some(run), Some(node)) => {
+                            superseded.contains(&(run, node)) && !interrupt_requests.contains(run)
+                        }
+                        _ => false,
+                    };
+                !superseded_interrupt
             })
             .cloned()
             .collect()

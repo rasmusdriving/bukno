@@ -695,6 +695,9 @@ fn t3_read_only_flow() {
 
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let truth = Truth { http: Http::new(), base: normalize_address(&address).unwrap(), env_id: env_id.clone(), rt };
+    // The test's own reads send the token too: check the server first, as the app does.
+    let answering = truth.rt.block_on(truth.http.descriptor(&truth.base)).expect("descriptor");
+    assert_eq!(answering.environment_id, env_id, "the address answers as the paired environment");
 
     // ----- Lists --------------------------------------------------------------
     let (mut lists_ok, mut lists_observed) = (false, json!(null));
@@ -974,18 +977,29 @@ fn t3_read_only_flow() {
     drop(app);
     std::fs::copy(run.state.join("t3-client.log"), run.evidence.join("t3-client.log")).ok();
     std::fs::copy(run.state.join("t3-environments.json"), run.evidence.join("t3-environments.json")).ok();
+    // Every secret, in every form it could be written: bearer tokens, whole
+    // pairing links, and the one-time credential inside each link, plain and
+    // percent-encoded. Searched in the state folder and the evidence.
+    let mut secrets: Vec<String> = tokens.iter().map(|t| t.expose().to_owned()).collect();
+    for link in &links {
+        secrets.push(link.clone());
+        let parsed = bukno_t3_client::pairing::parse_pairing(None, link).expect("pairing link");
+        let credential = parsed.credential.expose().to_owned();
+        secrets.push(url::form_urlencoded::byte_serialize(credential.as_bytes()).collect());
+        secrets.push(credential);
+    }
     let mut leaks = Vec::new();
-    for t in &tokens {
-        leaks.extend(files_containing(&run.state, t.expose().as_bytes()));
-        leaks.extend(files_containing(&run.evidence, t.expose().as_bytes()));
-        for link in &links {
-            leaks.extend(files_containing(&run.evidence, link.as_bytes()));
+    for secret in &secrets {
+        for dir in [&run.state, &run.evidence] {
+            leaks.extend(files_containing(dir, secret.as_bytes()));
         }
     }
+    leaks.sort();
+    leaks.dedup();
     run.check(
         "T1 no token or pairing link in the log, state folder or evidence",
         leaks.is_empty() && !tokens.is_empty(),
-        json!({"files": leaks}),
+        json!({"files": leaks, "secret_forms_searched": secrets.len()}),
     );
     run.write();
     eprintln!("evidence in {}", run.evidence.display());

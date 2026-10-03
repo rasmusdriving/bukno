@@ -181,3 +181,66 @@ fn unknown_types_stay_visible_and_move_the_cursor() {
         .is_err()
     );
 }
+
+fn event(sequence: u64, event_type: &str, payload: Value) -> ThreadItem {
+    ThreadItem::decode(&json!({
+        "kind": "event", "sequence": sequence,
+        "event": {"type": event_type, "threadId": "t1", "payload": payload}
+    }))
+    .unwrap()
+}
+
+fn empty_snapshot() -> ThreadItem {
+    ThreadItem::decode(&json!({
+        "kind": "snapshot", "snapshotSequence": 10,
+        "projection": {"thread": {"title": "T"}, "runs": [], "attempts": [], "visibleTurnItems": []}
+    }))
+    .unwrap()
+}
+
+fn item(id: &str, item_type: &str, ordinal: u64, node: &str) -> Value {
+    json!({"type": item_type, "id": id, "threadId": "t1", "runId": "r1", "nodeId": node,
+           "ordinal": ordinal, "status": "completed", "message": "m"})
+}
+
+#[test]
+fn a_finished_run_is_published_as_no_longer_working() {
+    let mut thread = ThreadState::new("t1");
+    thread.apply(empty_snapshot());
+    assert!(thread.apply(event(11, "run.created", json!({"id": "r1", "status": "running"}))));
+    assert!(thread.working());
+    // running -> completed changes what is shown (the working state), so it publishes.
+    assert!(thread.apply(event(12, "run.updated", json!({"id": "r1", "status": "completed"}))));
+    assert!(!thread.working());
+}
+
+#[test]
+fn superseded_interrupt_results_are_hidden_as_in_t3() {
+    let mut thread = ThreadState::new("t1");
+    thread.apply(empty_snapshot());
+    thread.apply(event(11, "turn-item.updated", item("i1", "run_interrupt_result", 1, "n1")));
+    assert_eq!(thread.visible_rows().len(), 1);
+    thread.apply(event(
+        12,
+        "run-attempt.updated",
+        json!({"id": "a1", "runId": "r1", "rootNodeId": "n1", "status": "superseded"}),
+    ));
+    assert_eq!(thread.visible_rows().len(), 0, "hidden: superseded and no interrupt request");
+    // A paired stop-then-steer keeps it visible.
+    thread.apply(event(13, "turn-item.updated", item("i0", "run_interrupt_request", 0, "n0")));
+    assert_eq!(thread.visible_rows().len(), 2);
+}
+
+#[test]
+fn a_reloaded_chat_never_repeats_a_revision() {
+    let mut first = ThreadState::new("t1");
+    first.apply(empty_snapshot());
+    first.apply(event(11, "turn-item.updated", item("i1", "system_notice", 1, "n1")));
+    let seen_rows: Vec<u64> = first.rows.iter().map(|r| r.revision).collect();
+    let mut again = ThreadState::new("t1");
+    assert_ne!(again.incarnation, first.incarnation);
+    again.apply(empty_snapshot());
+    again.apply(event(11, "turn-item.updated", item("i1", "system_notice", 1, "n1")));
+    assert!(again.revision > first.revision);
+    assert!(again.rows.iter().all(|r| !seen_rows.contains(&r.revision)));
+}

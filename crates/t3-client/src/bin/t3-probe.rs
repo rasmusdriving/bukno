@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bukno_t3_client::http::Http;
-use bukno_t3_client::pairing::{normalize_address, parse_pairing, socket_url};
+use bukno_t3_client::pairing::{normalize_address, parse_pairing};
 use bukno_t3_client::rpc::{ReadOnlyMethod, Session, StreamEvent};
 use bukno_t3_client::secret::{SystemKeychain, TokenVault};
 use bukno_t3_client::store::{EnvironmentStore, SavedEnvironment};
@@ -91,11 +91,10 @@ async fn record(args: &[String]) -> Result<(), String> {
         .into_iter()
         .find(|e| e.environment_id == env)
         .ok_or("that environment is not saved")?;
-    let base = normalize_address(&saved.address).map_err(|e| e.user_message())?;
-    let http = Http::new();
-    let token = SystemKeychain.load(&env).map_err(|e| e.user_message())?.ok_or("no saved sign-in")?;
-    let ticket = http.websocket_ticket(&base, &token).await.map_err(|e| e.user_message())?;
-    let session = Session::connect(&socket_url(&base, &ticket), log()).await.map_err(|e| e.user_message())?;
+    // The same checked setup as the app: identity, protocol and expiry first.
+    let (session, _) = bukno_t3_client::hub::connect_saved(&Http::new(), &SystemKeychain, &saved, log())
+        .await
+        .map_err(|e| e.user_message())?;
     let mut file = std::fs::File::create(&out).map_err(|e| e.to_string())?;
     let mut write = |stream: &str, value: &serde_json::Value| {
         let line = json!({"at": time::now_utc(), "stream": stream, "value": value});

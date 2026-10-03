@@ -192,6 +192,17 @@ pub struct Run {
     pub status: String,
 }
 
+/// One attempt at a run. Steering can supersede an attempt; T3 then hides
+/// that attempt's interrupt result unless the run has an interrupt request.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunAttempt {
+    pub id: String,
+    pub run_id: String,
+    pub root_node_id: String,
+    pub status: String,
+}
+
 /// What kind of row a turn item is, with the fields Bukno shows.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TurnKind {
@@ -258,6 +269,7 @@ pub struct TurnItem {
     pub id: String,
     pub thread_id: String,
     pub run_id: Option<String>,
+    pub node_id: Option<String>,
     pub ordinal: u64,
     pub status: String,
     pub title: Option<String>,
@@ -370,6 +382,7 @@ impl TurnItem {
             id,
             thread_id,
             run_id: opt_text(value, "runId"),
+            node_id: opt_text(value, "nodeId"),
             ordinal,
             status: text(value, "status"),
             title: opt_text(value, "title"),
@@ -412,6 +425,7 @@ pub struct ThreadSnapshot {
     pub snapshot_sequence: u64,
     pub title: String,
     pub runs: Vec<Run>,
+    pub attempts: Vec<RunAttempt>,
     pub items: Vec<ProjectedItem>,
     pub history_cursor: Option<String>,
     pub has_more_history: bool,
@@ -469,6 +483,7 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
 pub enum ThreadEvent {
     TurnItem(TurnItem),
     Run(Run),
+    Attempt(RunAttempt),
     /// Thread metadata changed; the title is in the payload.
     Thread {
         title: Option<String>,
@@ -512,10 +527,15 @@ pub fn decode_snapshot(value: &Value, projection: &Value) -> Result<ThreadSnapsh
         Some(runs) => Vec::<Run>::deserialize(runs).map_err(|e| format!("runs: {e}"))?,
         None => Vec::new(),
     };
+    let attempts = match projection.get("attempts") {
+        Some(attempts) => Vec::<RunAttempt>::deserialize(attempts).map_err(|e| format!("attempts: {e}"))?,
+        None => Vec::new(),
+    };
     Ok(ThreadSnapshot {
         snapshot_sequence: field(value, "snapshotSequence")?,
         title: projection.get("thread").map(|t| text(t, "title")).unwrap_or_default(),
         runs,
+        attempts,
         items,
         history_cursor: opt_text(value, "historyCursor"),
         has_more_history: flag(value, "hasMoreHistory"),
@@ -545,6 +565,9 @@ impl ThreadItem {
                     "turn-item.updated" => ThreadEvent::TurnItem(TurnItem::decode(payload)?),
                     "run.created" | "run.updated" => {
                         ThreadEvent::Run(Run::deserialize(payload).map_err(|e| format!("run: {e}"))?)
+                    }
+                    "run-attempt.created" | "run-attempt.updated" => {
+                        ThreadEvent::Attempt(RunAttempt::deserialize(payload).map_err(|e| format!("run attempt: {e}"))?)
                     }
                     t if t.starts_with("thread.") => {
                         ThreadEvent::Thread { title: opt_text(payload, "title"), deleted: t == "thread.deleted" }

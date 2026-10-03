@@ -145,12 +145,18 @@ impl Shared {
 
     /// Replace an environment's view, unless `generation` is no longer its
     /// running task (it was forgotten or paired again).
+    ///
+    /// The task lock is held while the view is inserted, so a concurrent
+    /// forget cannot slip in between the check and the insert. Lock order is
+    /// always `tasks`, then `views`.
     fn publish(&self, generation: u64, view: EnvironmentView) {
-        let current = self.tasks.lock().unwrap().get(&view.saved.environment_id).is_some_and(|(g, _)| *g == generation);
-        if !current {
-            return;
+        {
+            let tasks = self.tasks.lock().unwrap();
+            if !tasks.get(&view.saved.environment_id).is_some_and(|(g, _)| *g == generation) {
+                return;
+            }
+            self.views.lock().unwrap().insert(view.saved.environment_id.clone(), Arc::new(view));
         }
-        self.views.lock().unwrap().insert(view.saved.environment_id.clone(), Arc::new(view));
         self.changed();
     }
 
@@ -195,7 +201,7 @@ impl Hub {
         });
         let hub = Self { runtime, shared };
         for environment in saved {
-            spawn_environment(&hub.shared, hub.runtime.handle(), environment);
+            spawn_environment(&hub.shared, hub.runtime.handle(), environment, None);
         }
         hub
     }
@@ -239,8 +245,11 @@ impl Hub {
     /// Remove an environment and its keychain entry.
     pub fn forget(&self, environment_id: &str) {
         self.send(environment_id, EnvCommand::Forget);
-        self.shared.tasks.lock().unwrap().remove(environment_id);
-        self.shared.views.lock().unwrap().remove(environment_id);
+        {
+            let mut tasks = self.shared.tasks.lock().unwrap();
+            tasks.remove(environment_id);
+            self.shared.views.lock().unwrap().remove(environment_id);
+        }
         let remaining: Vec<SavedEnvironment> = {
             let mut saved = self.shared.saved.lock().unwrap();
             saved.retain(|e| e.environment_id != environment_id);
@@ -304,11 +313,18 @@ impl Hub {
                 let message = format!("Paired, but the environment list could not be saved: {e}");
                 return shared.set_pairing(PairingStatus::Failed(message));
             }
-            // Re-pairing replaces the running task, which then uses the new sign-in.
+            // Re-pairing replaces the running task, which then uses the new
+            // sign-in. The chat open on screen stays open on the new task.
+            let open = shared
+                .views
+                .lock()
+                .unwrap()
+                .get(&saved.environment_id)
+                .and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
             if let Some((_, previous)) = shared.tasks.lock().unwrap().remove(&saved.environment_id) {
                 let _ = previous.send(EnvCommand::Forget);
             }
-            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone());
+            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone(), open);
             shared.set_pairing(PairingStatus::Paired { environment_id: saved.environment_id, label: saved.label });
         });
     }
@@ -318,12 +334,17 @@ impl Hub {
     }
 }
 
-fn spawn_environment(shared: &Arc<Shared>, handle: &tokio::runtime::Handle, saved: SavedEnvironment) {
+fn spawn_environment(
+    shared: &Arc<Shared>,
+    handle: &tokio::runtime::Handle,
+    saved: SavedEnvironment,
+    open_thread: Option<String>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let generation = shared.next_generation.fetch_add(1, Ordering::SeqCst);
     shared.tasks.lock().unwrap().insert(saved.environment_id.clone(), (generation, tx));
     shared.publish(generation, EnvironmentView::new(saved.clone()));
-    handle.spawn(run_environment(shared.clone(), generation, saved, rx));
+    handle.spawn(run_environment(shared.clone(), generation, saved, open_thread, rx));
 }
 
 impl EnvironmentView {
@@ -449,8 +470,20 @@ async fn wait(
 }
 
 async fn connect(shared: &Shared, saved: &SavedEnvironment) -> Result<(Session, crate::model::Descriptor), T3Error> {
+    connect_saved(&shared.http, shared.vault.as_ref(), saved, shared.log.clone()).await
+}
+
+/// Open a socket to a saved environment. The server's identity, protocol and
+/// the sign-in's expiry are checked before the token leaves this computer,
+/// so a different server now at the saved address never receives it.
+pub async fn connect_saved(
+    http: &Http,
+    vault: &dyn TokenVault,
+    saved: &SavedEnvironment,
+    log: Log,
+) -> Result<(Session, crate::model::Descriptor), T3Error> {
     let base = Url::parse(&saved.address).map_err(|e| T3Error::BadAddress { detail: e.to_string() })?;
-    let descriptor = shared.http.descriptor(&base).await?;
+    let descriptor = http.descriptor(&base).await?;
     if descriptor.environment_id != saved.environment_id {
         return Err(T3Error::WrongEnvironment {
             expected: saved.environment_id.clone(),
@@ -460,9 +493,9 @@ async fn connect(shared: &Shared, saved: &SavedEnvironment) -> Result<(Session, 
     if time::now_epoch_secs() >= saved.token_expires_at {
         return Err(T3Error::SignInExpired);
     }
-    let token = shared.vault.load(&saved.environment_id)?.ok_or(T3Error::NotPaired)?;
-    let ticket = shared.http.websocket_ticket(&base, &token).await?;
-    let session = Session::connect(&socket_url(&base, &ticket), shared.log.clone()).await?;
+    let token = vault.load(&saved.environment_id)?.ok_or(T3Error::NotPaired)?;
+    let ticket = http.websocket_ticket(&base, &token).await?;
+    let session = Session::connect(&socket_url(&base, &ticket), log).await?;
     Ok((session, descriptor))
 }
 
@@ -493,6 +526,7 @@ async fn run_environment(
     shared: Arc<Shared>,
     generation: u64,
     saved: SavedEnvironment,
+    open_thread: Option<String>,
     mut commands: mpsc::UnboundedReceiver<EnvCommand>,
 ) {
     let log = shared.log.clone();
@@ -504,7 +538,7 @@ async fn run_environment(
         server_version: None,
         shell: ShellState::default(),
         providers: Vec::new(),
-        thread: None,
+        thread: open_thread.as_deref().map(ThreadState::new),
         thread_error: None,
         loading_history: false,
         history_error: None,
@@ -512,8 +546,7 @@ async fn run_environment(
         requests_sent: 0,
         unknown_frames: 0,
     };
-    let (history_tx, mut history_rx) =
-        mpsc::unbounded_channel::<(String, Result<crate::model::HistoryPage, T3Error>)>();
+    let (history_tx, mut history_rx) = mpsc::unbounded_channel::<HistoryReply>();
     let mut attempt: u32 = 0;
 
     loop {
@@ -611,6 +644,17 @@ fn backoff(attempt: u32) -> Duration {
     BACKOFF_START.mul_f64(factor).min(BACKOFF_MAX)
 }
 
+/// A history page reply, tied to the load of the chat and the cursor it was
+/// asked for, so a late reply for an earlier load is discarded.
+struct HistoryReply {
+    incarnation: u64,
+    cursor: String,
+    result: Result<crate::model::HistoryPage, T3Error>,
+}
+
+/// Chat list decode failures in a row on one socket before reconnecting it.
+const SHELL_RETRY_LIMIT: u32 = 3;
+
 enum Served {
     Forget,
     /// `healthy` is true when the connection had fully synchronized, so the
@@ -626,8 +670,8 @@ async fn serve(
     state: &mut EnvState,
     session: &Session,
     commands: &mut mpsc::UnboundedReceiver<EnvCommand>,
-    history_tx: &mpsc::UnboundedSender<(String, Result<crate::model::HistoryPage, T3Error>)>,
-    history_rx: &mut mpsc::UnboundedReceiver<(String, Result<crate::model::HistoryPage, T3Error>)>,
+    history_tx: &mpsc::UnboundedSender<HistoryReply>,
+    history_rx: &mut mpsc::UnboundedReceiver<HistoryReply>,
 ) -> Served {
     let log = shared.log.clone();
     let name = state.saved.label.clone();
@@ -670,6 +714,7 @@ async fn serve(
     state.status = ConnectionStatus::Connected { current: false };
     shared.publish(state.generation, state.view());
     let mut thread_failures: u32 = 0;
+    let mut shell_failures: u32 = 0;
     let mut closed = session.closed.clone();
 
     loop {
@@ -677,6 +722,7 @@ async fn serve(
             event = shell.next() => match event {
                 Some(StreamEvent::Values(values)) => {
                     let mut changed = false;
+                    let mut failed = None;
                     for value in &values {
                         match ShellItem::decode(value) {
                             Ok(item) => {
@@ -686,12 +732,32 @@ async fn serve(
                                 changed |= state.shell.apply(item);
                             }
                             Err(detail) => {
-                                log(&format!("env {name}: unreadable shell item: {detail}"));
-                                return lost(T3Error::Decode { detail: format!("chat list: {detail}") }, state);
+                                failed = Some(detail);
+                                break;
                             }
                         }
                     }
+                    if let Some(detail) = failed {
+                        // Keep showing the list, and ask for a fresh snapshot of it.
+                        log(&format!("env {name}: unreadable shell item: {detail}; reloading the chat list"));
+                        shell_failures += 1;
+                        if shell_failures > SHELL_RETRY_LIMIT {
+                            return lost(T3Error::Disconnected { detail: format!("the chat list kept failing ({detail})") }, state);
+                        }
+                        state.shell.last_sequence = None;
+                        state.shell.connection_started();
+                        drop(shell); // Interrupt the old stream first.
+                        shell = match session.subscribe(ReadOnlyMethod::SubscribeShell, shell_request(&state.shell)).await {
+                            Ok(s) => s,
+                            Err(e) => return lost(e, state),
+                        };
+                        shared.publish(state.generation, state.view());
+                        continue;
+                    }
                     shell.ack();
+                    if state.shell.synchronized {
+                        shell_failures = 0;
+                    }
                     if changed {
                         shared.publish(state.generation, state.view());
                     }
@@ -822,6 +888,7 @@ async fn serve(
                     let vault = shared.vault.clone();
                     let saved = state.saved.clone();
                     let thread_id = thread.thread_id.clone();
+                    let incarnation = thread.incarnation;
                     let tx = history_tx.clone();
                     tokio::spawn(async move {
                         let result = async {
@@ -829,13 +896,21 @@ async fn serve(
                             let token = vault.load(&saved.environment_id)?.ok_or(T3Error::NotPaired)?;
                             http.history_page(&base, &token, &thread_id, &cursor).await
                         }.await;
-                        let _ = tx.send((thread_id, result));
+                        let _ = tx.send(HistoryReply { incarnation, cursor, result });
                     });
                 }
             },
             page = history_rx.recv() => {
-                let Some((thread_id, result)) = page else { continue };
-                let Some(thread) = state.thread.as_mut().filter(|t| t.thread_id == thread_id) else { continue };
+                let Some(HistoryReply { incarnation, cursor, result }) = page else { continue };
+                // Only a reply for this load of the chat, at its current cursor, applies.
+                let Some(thread) = state
+                    .thread
+                    .as_mut()
+                    .filter(|t| t.incarnation == incarnation && t.history_cursor.as_deref() == Some(cursor.as_str()))
+                else {
+                    log(&format!("env {name}: discarded a history page for an earlier load of the chat"));
+                    continue;
+                };
                 state.loading_history = false;
                 match result {
                     Ok(page) => {
