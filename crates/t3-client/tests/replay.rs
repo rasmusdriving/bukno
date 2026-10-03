@@ -244,3 +244,25 @@ fn a_reloaded_chat_never_repeats_a_revision() {
     assert!(again.revision > first.revision);
     assert!(again.rows.iter().all(|r| !seen_rows.contains(&r.revision)));
 }
+
+#[test]
+fn an_interrupt_request_outside_the_loaded_window_keeps_its_result_visible() {
+    // A bounded snapshot: the request is only in the full turnItems, not in
+    // the visible window. T3 keeps the superseded attempt's result visible.
+    let mut thread = ThreadState::new("t1");
+    thread.apply(
+        ThreadItem::decode(&json!({
+            "kind": "snapshot", "snapshotSequence": 10, "hasMoreHistory": true, "historyCursor": "c1",
+            "projection": {
+                "thread": {"title": "T"}, "runs": [],
+                "attempts": [{"id": "a1", "runId": "r1", "rootNodeId": "n1", "status": "superseded"}],
+                "turnItems": [item("i0", "run_interrupt_request", 0, "n0"), item("i1", "run_interrupt_result", 1, "n1")],
+                "visibleTurnItems": [{"position": 0, "visibility": "local", "sourceThreadId": "t1",
+                    "sourceItemId": "i1", "item": item("i1", "run_interrupt_result", 1, "n1")}]
+            }
+        }))
+        .unwrap(),
+    );
+    assert_eq!(thread.rows.len(), 1);
+    assert_eq!(thread.visible_rows().len(), 1, "the request outside the window still counts");
+}

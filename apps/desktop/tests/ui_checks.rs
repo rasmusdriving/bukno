@@ -1634,3 +1634,30 @@ fn review_question_cards_fit() {
     )
     .unwrap();
 }
+
+/// A T3 chat is rebuilt with `Document::load` when older history arrives or
+/// a row is hidden. The same item can then come back with new text. The
+/// layout cache must not draw the text it measured for the old load.
+#[test]
+fn review_document_rebuild_draws_new_text() {
+    let mut c = Check::new("review-document-rebuild", "empty", [1440.0, 900.0], true);
+    c.app().view = bukno_desktop::app::View::Chat;
+    let item = |text: &str| TranscriptItem {
+        id: ItemId(STREAM_ITEM.0 + 9_000),
+        task: synthetic::TASK,
+        run: None,
+        kind: ItemKind::AgentMessage { provider: Provider::Codex },
+        text: text.to_owned(),
+        meta: None,
+        completed: true,
+        revision: 1,
+    };
+    c.app().doc.load(&[item("OLD TEXT in the first load.")]);
+    c.step(3);
+    c.app().doc.load(&[item("NEW TEXT in the second load.")]);
+    c.step(3);
+    let doc = c.harness.get_by(|n| n.role() == Role::Document);
+    let drawn = doc.accesskit_node().document_range().text();
+    assert!(drawn.contains("NEW TEXT"), "drawn text after the rebuild: {drawn:?}");
+    assert!(!drawn.contains("OLD TEXT"), "the old layout was reused: {drawn:?}");
+}

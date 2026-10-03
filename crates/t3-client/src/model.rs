@@ -427,6 +427,9 @@ pub struct ThreadSnapshot {
     pub runs: Vec<Run>,
     pub attempts: Vec<RunAttempt>,
     pub items: Vec<ProjectedItem>,
+    /// Runs with an interrupt request anywhere in the chat, from the full
+    /// `turnItems`, which also covers rows outside a bounded window.
+    pub interrupt_request_runs: Vec<String>,
     pub history_cursor: Option<String>,
     pub has_more_history: bool,
     pub latest_local_turn_ordinal: Option<u64>,
@@ -531,8 +534,20 @@ pub fn decode_snapshot(value: &Value, projection: &Value) -> Result<ThreadSnapsh
         Some(attempts) => Vec::<RunAttempt>::deserialize(attempts).map_err(|e| format!("attempts: {e}"))?,
         None => Vec::new(),
     };
+    let interrupt_request_runs = projection
+        .get("turnItems")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|i| i.get("type").and_then(Value::as_str) == Some("run_interrupt_request"))
+                .filter_map(|i| opt_text(i, "runId"))
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(ThreadSnapshot {
         snapshot_sequence: field(value, "snapshotSequence")?,
+        interrupt_request_runs,
         title: projection.get("thread").map(|t| text(t, "title")).unwrap_or_default(),
         runs,
         attempts,

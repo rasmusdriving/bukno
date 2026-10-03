@@ -43,6 +43,9 @@ pub struct ThreadState {
     pub rows: Vec<Arc<Row>>,
     runs: HashMap<String, String>,
     attempts: HashMap<String, RunAttempt>,
+    /// Runs with an interrupt request, including requests outside the loaded
+    /// rows, as T3 checks them against its full `turnItems`.
+    interrupt_request_runs: HashSet<String>,
     pub last_sequence: Option<u64>,
     /// True after the catch-up marker on the current subscription.
     pub synchronized: bool,
@@ -103,6 +106,7 @@ impl ThreadState {
                 self.title = snapshot.title;
                 self.runs = snapshot.runs.into_iter().map(|r| (r.id, r.status)).collect();
                 self.attempts = snapshot.attempts.into_iter().map(|a| (a.id.clone(), a)).collect();
+                self.interrupt_request_runs = snapshot.interrupt_request_runs.into_iter().collect();
                 self.rows = snapshot.items.into_iter().map(|i| self.row(i)).collect();
                 self.history_cursor = snapshot.history_cursor;
                 self.has_more_history = snapshot.has_more_history;
@@ -172,6 +176,11 @@ impl ThreadState {
     }
 
     fn upsert(&mut self, item: TurnItem) -> bool {
+        if item.type_name == "run_interrupt_request"
+            && let Some(run) = &item.run_id
+        {
+            self.interrupt_request_runs.insert(run.clone());
+        }
         let index = self.rows.iter().position(|r| r.local && r.source_item_id == item.id);
         if index.is_none() && self.has_more_history {
             // A row older than the loaded window: its history page brings it.
@@ -241,6 +250,7 @@ impl ThreadState {
             .iter()
             .filter(|r| r.item.type_name == "run_interrupt_request")
             .filter_map(|r| r.item.run_id.as_deref())
+            .chain(self.interrupt_request_runs.iter().map(String::as_str))
             .collect();
         self.rows
             .iter()

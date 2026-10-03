@@ -380,7 +380,10 @@ struct EnvState {
     providers: Vec<Provider>,
     thread: Option<ThreadState>,
     thread_error: Option<String>,
-    loading_history: bool,
+    /// The history page being fetched: (chat load, cursor). It counts as
+    /// loading only while it still matches the open chat, so a reload or a
+    /// new snapshot never leaves paging stuck.
+    history_pending: Option<(u64, String)>,
     history_error: Option<String>,
     connections: u64,
     requests_sent: u64,
@@ -388,6 +391,15 @@ struct EnvState {
 }
 
 impl EnvState {
+    fn history_in_flight(&self) -> bool {
+        match (&self.history_pending, &self.thread) {
+            (Some((incarnation, cursor)), Some(thread)) => {
+                thread.incarnation == *incarnation && thread.history_cursor.as_deref() == Some(cursor.as_str())
+            }
+            _ => false,
+        }
+    }
+
     fn view(&self) -> EnvironmentView {
         let mut projects: Vec<ProjectShell> = self.shell.projects.values().cloned().collect();
         projects.sort_by_key(|p| p.title.to_lowercase());
@@ -413,7 +425,7 @@ impl EnvState {
                 loaded: t.loaded(),
                 current: t.synchronized,
                 has_more_history: t.has_more_history,
-                loading_history: self.loading_history,
+                loading_history: self.history_in_flight(),
                 history_error: self.history_error.clone(),
                 removed: t.removed,
                 working: t.working(),
@@ -473,15 +485,23 @@ async fn connect(shared: &Shared, saved: &SavedEnvironment) -> Result<(Session, 
     connect_saved(&shared.http, shared.vault.as_ref(), saved, shared.log.clone()).await
 }
 
-/// Open a socket to a saved environment. The server's identity, protocol and
-/// the sign-in's expiry are checked before the token leaves this computer,
-/// so a different server now at the saved address never receives it.
-pub async fn connect_saved(
+/// The saved address and token, after checking that the address still
+/// answers as the saved environment with the supported protocol and that
+/// the sign-in has not expired. Every request that carries the token goes
+/// through this first.
+pub async fn checked_token(
     http: &Http,
     vault: &dyn TokenVault,
     saved: &SavedEnvironment,
-    log: Log,
-) -> Result<(Session, crate::model::Descriptor), T3Error> {
+) -> Result<(Url, crate::secret::Secret), T3Error> {
+    checked(http, vault, saved).await.map(|(base, token, _)| (base, token))
+}
+
+async fn checked(
+    http: &Http,
+    vault: &dyn TokenVault,
+    saved: &SavedEnvironment,
+) -> Result<(Url, crate::secret::Secret, crate::model::Descriptor), T3Error> {
     let base = Url::parse(&saved.address).map_err(|e| T3Error::BadAddress { detail: e.to_string() })?;
     let descriptor = http.descriptor(&base).await?;
     if descriptor.environment_id != saved.environment_id {
@@ -494,6 +514,19 @@ pub async fn connect_saved(
         return Err(T3Error::SignInExpired);
     }
     let token = vault.load(&saved.environment_id)?.ok_or(T3Error::NotPaired)?;
+    Ok((base, token, descriptor))
+}
+
+/// Open a socket to a saved environment. The server's identity, protocol and
+/// the sign-in's expiry are checked before the token leaves this computer,
+/// so a different server now at the saved address never receives it.
+pub async fn connect_saved(
+    http: &Http,
+    vault: &dyn TokenVault,
+    saved: &SavedEnvironment,
+    log: Log,
+) -> Result<(Session, crate::model::Descriptor), T3Error> {
+    let (base, token, descriptor) = checked(http, vault, saved).await?;
     let ticket = http.websocket_ticket(&base, &token).await?;
     let session = Session::connect(&socket_url(&base, &ticket), log).await?;
     Ok((session, descriptor))
@@ -540,7 +573,7 @@ async fn run_environment(
         providers: Vec::new(),
         thread: open_thread.as_deref().map(ThreadState::new),
         thread_error: None,
-        loading_history: false,
+        history_pending: None,
         history_error: None,
         connections: 0,
         requests_sent: 0,
@@ -858,7 +891,7 @@ async fn serve(
                     thread_failures = 0;
                     state.thread_error = None;
                     state.history_error = None;
-                    state.loading_history = false;
+                    state.history_pending = None;
                     let thread = ThreadState::new(&id);
                     match session.subscribe(ReadOnlyMethod::SubscribeThread, thread_request(&thread)).await {
                         Ok(s) => thread_sub = Some(s),
@@ -878,10 +911,10 @@ async fn serve(
                 Some(EnvCommand::LoadOlder) => {
                     let Some(thread) = state.thread.as_ref() else { continue };
                     let Some(cursor) = thread.history_cursor.clone() else { continue };
-                    if state.loading_history || !thread.has_more_history {
+                    if state.history_in_flight() || !thread.has_more_history {
                         continue;
                     }
-                    state.loading_history = true;
+                    state.history_pending = Some((thread.incarnation, cursor.clone()));
                     state.history_error = None;
                     shared.publish(state.generation, state.view());
                     let http = shared.http.clone();
@@ -892,8 +925,8 @@ async fn serve(
                     let tx = history_tx.clone();
                     tokio::spawn(async move {
                         let result = async {
-                            let base = Url::parse(&saved.address).map_err(|e| T3Error::BadAddress { detail: e.to_string() })?;
-                            let token = vault.load(&saved.environment_id)?.ok_or(T3Error::NotPaired)?;
+                            // Same checks as opening a socket before the token is sent.
+                            let (base, token) = checked_token(&http, vault.as_ref(), &saved).await?;
                             http.history_page(&base, &token, &thread_id, &cursor).await
                         }.await;
                         let _ = tx.send(HistoryReply { incarnation, cursor, result });
@@ -902,16 +935,20 @@ async fn serve(
             },
             page = history_rx.recv() => {
                 let Some(HistoryReply { incarnation, cursor, result }) = page else { continue };
+                let key = (incarnation, cursor);
+                if state.history_pending.as_ref() == Some(&key) {
+                    state.history_pending = None;
+                }
                 // Only a reply for this load of the chat, at its current cursor, applies.
                 let Some(thread) = state
                     .thread
                     .as_mut()
-                    .filter(|t| t.incarnation == incarnation && t.history_cursor.as_deref() == Some(cursor.as_str()))
+                    .filter(|t| t.incarnation == key.0 && t.history_cursor.as_deref() == Some(key.1.as_str()))
                 else {
                     log(&format!("env {name}: discarded a history page for an earlier load of the chat"));
+                    shared.publish(state.generation, state.view());
                     continue;
                 };
-                state.loading_history = false;
                 match result {
                     Ok(page) => {
                         log(&format!("env {name}: loaded {} older items", page.items.len()));

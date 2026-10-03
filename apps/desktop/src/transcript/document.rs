@@ -85,6 +85,10 @@ pub struct Document {
     by_item: HashMap<ItemId, usize>,
     /// Increases whenever any block changes; the layout uses it to notice work.
     pub revision: u64,
+    /// Last block revision handed out. Block revisions only go up, even
+    /// across [`Document::load`], so a rebuilt block never matches a layout
+    /// cached for different text under the same block ID.
+    last_block_revision: u64,
     /// Source maps of messages that are streaming, or that completed since
     /// the transcript was last drawn. A selection is made on the text as
     /// drawn, so its ends are moved through the Markdown source to the
@@ -167,6 +171,7 @@ impl Document {
         message.block_count = parsed.len();
 
         let mut maps = Vec::with_capacity(parsed.len());
+        let mut last_block_revision = self.last_block_revision;
         let new_blocks: Vec<Block> = parsed
             .into_iter()
             .enumerate()
@@ -176,8 +181,10 @@ impl Document {
                 let old = (ordinal < old_count).then(|| &self.blocks[first + ordinal]);
                 let revision = match old {
                     Some(old) if old.kind == kind && old.text == text && old.spans == spans => old.revision,
-                    Some(old) => old.revision + 1,
-                    None => 1,
+                    _ => {
+                        last_block_revision += 1;
+                        last_block_revision
+                    }
                 };
                 if keep_maps {
                     maps.push(map.into_boxed_slice());
@@ -185,6 +192,7 @@ impl Document {
                 Block { id, revision, chars: text.chars().count(), kind, text, spans, message: index }
             })
             .collect();
+        self.last_block_revision = last_block_revision;
         if keep_maps {
             let tracked =
                 self.tracked.entry(item.id).or_insert(Tracked { revision: 0, maps: Maps::default(), drawn: None });
@@ -225,7 +233,9 @@ impl Document {
                 maps.push(map.into_boxed_slice());
             }
             self.by_block.insert(id, self.blocks.len());
-            self.blocks.push(Block { id, revision: 1, chars: text.chars().count(), kind, text, spans, message: index });
+            self.last_block_revision += 1;
+            let revision = self.last_block_revision;
+            self.blocks.push(Block { id, revision, chars: text.chars().count(), kind, text, spans, message: index });
         }
         if !item.completed {
             self.tracked.insert(item.id, Tracked { revision: item.revision, maps: maps.into(), drawn: None });
