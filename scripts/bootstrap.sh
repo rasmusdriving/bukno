@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prepare this checkout for building on a Mac.
+# Prepare this checkout for building on macOS or Linux.
 #
 # Writes .cargo/config.local.toml (ignored by Git) so compiler output goes to the
 # internal drive instead of the repository, then reports every location it uses.
@@ -8,7 +8,13 @@ set -eu
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 local_config="$repo/.cargo/config.local.toml"
-target_dir="${BUKNO_CARGO_TARGET_DIR:-$HOME/Library/Caches/bukno/cargo-target}"
+platform="$(uname -s)"
+case "$platform" in
+    Darwin) cache_dir="$HOME/Library/Caches/bukno" ;;
+    Linux) cache_dir="$HOME/.cache/bukno" ;;
+    *) echo "Use Cargo's native setup on $platform; this script supports macOS and Linux." >&2; exit 1 ;;
+esac
+target_dir="${BUKNO_CARGO_TARGET_DIR:-$cache_dir/cargo-target}"
 
 # Finder and fresh shells may not have ~/.cargo/bin on PATH yet.
 PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
@@ -28,20 +34,24 @@ if [ -n "${BUKNO_ARTIFACTS_DIR:-}" ]; then
 elif [ -d "$repo/../../../artifacts" ]; then
     artifacts_dir="$(cd "$repo/../../../artifacts" && pwd)/bukno"
 else
-    artifacts_dir="$HOME/Library/Caches/bukno/artifacts"
+    artifacts_dir="$cache_dir/artifacts"
 fi
 mkdir -p "$artifacts_dir"
 
 developer_dir=""
 # The Xcode linker refuses to run until its license is accepted. The Command Line
 # Tools work without that step, so use them for Cargo only when Xcode is blocked.
-if ! xcrun clang --version >/dev/null 2>&1; then
+if [ "$platform" = Darwin ] && ! xcrun clang --version >/dev/null 2>&1; then
     if [ -x /Library/Developer/CommandLineTools/usr/bin/clang ]; then
         developer_dir="/Library/Developer/CommandLineTools"
     else
         echo "No working C linker. Accept the Xcode license (sudo xcodebuild -license) or install the Command Line Tools (xcode-select --install)." >&2
         exit 1
     fi
+fi
+if [ "$platform" = Linux ] && ! command -v cc >/dev/null 2>&1; then
+    echo "No working C linker. Install your distribution's build-essential package." >&2
+    exit 1
 fi
 
 {
@@ -63,7 +73,9 @@ echo "  rustup home:     ${RUSTUP_HOME:-$HOME/.rustup}"
 echo "  cargo home:      ${CARGO_HOME:-$HOME/.cargo}"
 echo "  toolchain:       $(cd "$repo" && rustup show active-toolchain | head -n 1)"
 echo "  cargo target:    $target_dir"
-if [ -n "$developer_dir" ]; then
+if [ "$platform" = Linux ]; then
+    echo "  linker:          $(command -v cc)"
+elif [ -n "$developer_dir" ]; then
     echo "  linker:          $developer_dir (Xcode license not accepted)"
 else
     echo "  linker:          $(xcode-select -p)"

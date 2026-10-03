@@ -59,7 +59,18 @@ fn default_state_dir() -> Result<PathBuf, PathError> {
     Ok(PathBuf::from(local).join("Bukno"))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+fn default_state_dir() -> Result<PathBuf, PathError> {
+    if let Some(data) = env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+        && data.is_absolute()
+    {
+        return Ok(data.join("bukno"));
+    }
+    let home = env::var_os("HOME").ok_or(PathError::NoUserFolder("HOME"))?;
+    Ok(PathBuf::from(home).join(".local/share/bukno"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn default_state_dir() -> Result<PathBuf, PathError> {
     Err(PathError::NoUserFolder("a supported platform"))
 }

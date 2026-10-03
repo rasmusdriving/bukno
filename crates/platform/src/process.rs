@@ -1,6 +1,6 @@
 //! Owned engine processes (specification section 16).
 //!
-//! On macOS every engine starts as the leader of its own process group, so
+//! On Unix every engine starts as the leader of its own process group, so
 //! Bukno can end it together with the tools it started. Records of owned
 //! processes let the next launch clean up after a crash. Stopping is always
 //! by recorded process group and start time, never by a name match.
@@ -11,7 +11,7 @@ use std::path::Path;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessRecord {
     pub pid: u32,
-    /// Seconds since the Unix epoch, as the OS reports it.
+    /// OS start identity: epoch seconds on macOS, epoch nanoseconds on Linux.
     pub started: u64,
     pub executable: String,
     pub generation: u64,
@@ -51,7 +51,11 @@ pub fn start_time(pid: u32) -> Option<u64> {
     {
         crate::macos::process_start(pid)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::process_start(pid)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = pid;
         None
@@ -69,7 +73,11 @@ pub fn group_members(leader: u32) -> Vec<u32> {
     {
         crate::macos::group_members(leader)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::group_members(leader)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = leader;
         Vec::new()

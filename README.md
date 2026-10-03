@@ -2,6 +2,12 @@
 
 A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 1 built: the Mac app runs real Codex chats, with or without a project, through your existing Codex login. Claude arrives in Pass 2.
 
+The [3 October T3 backend audit](docs/t3-backend-audit.md) proposes keeping the
+Rust interface and reusing T3's server. It covers Tailscale, T3 Connect, local
+Codex/Claude plugin management, ownership changes and delivery gates. That
+migration is not implemented. [Ubuntu setup](docs/ubuntu.md) covers the current
+native app and its separate portability verification.
+
 ## Agreed architecture
 
 - Starts as the author's daily driver, published as open source for others to use.
@@ -30,6 +36,10 @@ cargo xtask e2e --provider codex --scenario pass1   # live: uses your Codex logi
 cargo xtask package --platform macos
 ```
 
+On the Ubuntu devbox, use the internal working-copy workflow and
+`sh scripts/install-linux.sh` as described in [Ubuntu setup](docs/ubuntu.md).
+The installed launcher opens a normal app; it does not start a synthetic demo.
+
 A normal launch uses your app state in `~/Library/Application Support/Bukno/`
 and the installed Codex. `--scenario <name>` starts the labeled synthetic mode
 instead. See the [Pass 0 toolkit decision](docs/toolkit-decision.md) for what
@@ -50,7 +60,15 @@ was verified.
 
 ## Current status
 
-Codex text work runs end to end in the Mac app with the existing Codex login (Codex 0.158.0, 2 October 2026). Claude, voice and dictation have not been tested end to end, and Windows has only been compile-checked. Memory figures in the plan are targets or observations from the existing desktop app, not Bukno results.
+Codex text work runs end to end in the Mac app with the existing Codex login
+(Codex 0.158.0, 2 October 2026). Ubuntu native launch, all 18 existing UI checks
+and both live Codex scenarios passed on 3 October with Codex 0.160.0, including
+approvals, Stop, restart/resume, draft persistence and engine cleanup. See
+[Ubuntu evidence and limitations](docs/ubuntu.md). Claude, voice and dictation
+have not been tested end to end, and Windows has only been compile-checked.
+The T3 frontend and plugin manager are proposed. Memory figures in the plan
+remain targets or observations from the existing desktop app, not new Bukno
+versus T3 benchmark results.
 
 The first-version design system and user journey are done and saved in [docs/design](docs/design/README.md). The first version specification is approved. Pass 0 is merged and reviewed. Pass 1 (the complete Codex flow on Mac) is built and passed its live end-to-end run; it waits for Sol's review. See the [first milestone](docs/first-milestone.md). Keep source and manifests here; install tools and dependency directories on the internal drive as directed in [AGENTS.md](AGENTS.md).
 

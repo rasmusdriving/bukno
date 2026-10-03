@@ -79,6 +79,8 @@ fn platform() -> &'static str {
         "macos"
     } else if cfg!(target_os = "windows") {
         "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
     } else {
         "other"
     }
@@ -116,7 +118,7 @@ fn write_json(path: &Path, value: &Value) -> Result {
     std::fs::write(path, serde_json::to_string_pretty(value).unwrap()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn manifest(dir: &Path, scenario: &str) -> Result {
+fn manifest(dir: &Path, scenario: &str, provider: &str) -> Result {
     let dirty_files = output("git", &["status", "--porcelain"]).unwrap_or_default();
     write_json(
         &dir.join("manifest.json"),
@@ -124,13 +126,20 @@ fn manifest(dir: &Path, scenario: &str) -> Result {
             "scenario": scenario,
             "commit": output("git", &["rev-parse", "HEAD"]),
             "dirty_files": dirty_files.lines().collect::<Vec<_>>(),
-            "os": output("sw_vers", &["-productVersion"]).or_else(|| output("cmd", &["/c", "ver"])),
+            "os": output("sw_vers", &["-productVersion"])
+                .or_else(|| output("cmd", &["/c", "ver"]))
+                .or_else(|| output("uname", &["-sr"])),
             "os_build": output("sw_vers", &["-buildVersion"]),
-            "hardware": output("sysctl", &["-n", "machdep.cpu.brand_string"]),
+            "hardware": output("sysctl", &["-n", "machdep.cpu.brand_string"])
+                .or_else(|| output("uname", &["-m"])),
             "memory_bytes": output("sysctl", &["-n", "hw.memsize"]),
             "rustc": output("rustc", &["-V"]),
             "date_utc": today(),
-            "engines": "none: Pass 0 synthetic scenario mode makes no engine connections",
+            "engines": if provider == "synthetic" {
+                "none: synthetic scenario mode makes no engine connections"
+            } else {
+                "installed Codex app-server; see engine.json for the version"
+            },
         }),
     )
 }
@@ -178,7 +187,7 @@ fn check() -> Result {
         .args(["check", "--workspace", "--all-targets", "--target", "x86_64-pc-windows-msvc"])
         .env("LIBSQLITE3_SYS_USE_PKG_CONFIG", "1")
         .env("SQLITE3_LIB_DIR", target_dir()))?;
-    println!("check: format, lint, Mac build and Windows compile check passed");
+    println!("check: format, lint, {} build and Windows compile check passed", platform());
     Ok(())
 }
 
@@ -223,7 +232,7 @@ fn e2e(args: &[String]) -> Result {
     }
     let dir = evidence_dir(provider, scenario);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    manifest(&dir, scenario)?;
+    manifest(&dir, scenario, provider)?;
     let started = Instant::now();
     let status = cargo()
         .args(["test", "-p", "bukno-desktop", "--test", "ui_checks", "--", "--test-threads=1"])
@@ -265,7 +274,7 @@ fn e2e(args: &[String]) -> Result {
 fn e2e_codex_pass1() -> Result {
     let dir = evidence_dir("codex", "pass1");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    manifest(&dir, "pass1")?;
+    manifest(&dir, "pass1", "codex")?;
     let codex = output("codex", &["--version"]);
     write_json(&dir.join("engine.json"), &json!({ "codex_version_on_path": codex }))?;
     std::fs::write(
@@ -307,7 +316,7 @@ fn bench(args: &[String]) -> Result {
     let app = package(&["--platform".into(), platform().into()])?;
     let binary = app.join("Contents/MacOS/bukno");
     let dir = evidence_dir("synthetic", &format!("bench-{workload}"));
-    manifest(&dir, workload)?;
+    manifest(&dir, workload, "synthetic")?;
     let mut runs = Vec::new();
     // One warm-up, then the measured samples (section 21).
     for sample in 0..=samples {

@@ -2,6 +2,11 @@
 
 Goal: real Codex and Claude text workflows in the Mac app, finished to daily-driver quality, with Windows completed before public release. Dictation and live voice follow through Codex app-server and do not block day one.
 
+On 3 October 2026, Rasmus requested an audit of using T3's backend and adding
+Ubuntu support. See the [proposed replacement backend plan](t3-backend-audit.md)
+and [Ubuntu verification](ubuntu.md). The passes below describe the existing
+direct-provider implementation; they do not establish a working T3 client.
+
 This is a checklist. The [first version specification](first-version-specification.md) defines what each item means, the pass it lands in, and its acceptance evidence; where this list and the specification differ, the specification wins ([decision 31](decisions.md)). Claude builds the foundation and Sol reviews each pass ([decision 34](decisions.md)).
 
 ## Done before implementation

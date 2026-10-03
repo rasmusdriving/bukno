@@ -14,6 +14,8 @@ Use `/Volumes/TOSHIBA Workspace/dev/artifacts/bukno/` for benchmark outputs and 
 
 ## Quality and verification
 
+Put substantial app changes in a pull request for review.
+
 Use concise, plain language and no em dashes in documents or app copy. Distinguish source/schema observations from successful authenticated flows. Measure the actual bottleneck and compare the same workload before/after. Include owned engine and tool children in memory figures.
 
 Do not add unit tests as a default implementation follow-up. Enumerate adapter failure paths before writing isolated tests or adapter implementation. Prefer real end-to-end provider flows and retain repeatable evidence. Preserve unrelated user edits; do not implement blanket Git resets as undo.
