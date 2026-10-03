@@ -16,6 +16,7 @@ use egui::{Key, KeyboardShortcut, Modifiers, Ui};
 
 use crate::components::composer::{ComposerState, composer_id};
 use crate::evidence::Evidence;
+use crate::sources::{T3ChatRef, T3Source};
 use crate::theme::Theme;
 use crate::transcript::TranscriptView;
 use crate::transcript::document::Document;
@@ -58,6 +59,8 @@ pub enum View {
     Chat,
     /// A new, empty chat waiting for its first message.
     NewChat,
+    /// A chat on a T3 server, read only ([`BuknoApp::remote`]).
+    Remote,
 }
 
 /// A message handed to the coordinator and not yet accepted or rejected.
@@ -154,6 +157,14 @@ pub struct BuknoApp {
     pub working_mark: crate::components::orb::Mark,
     pub evidence: Evidence,
     window_size: egui::Vec2,
+    /// Chats on T3 servers. Absent in synthetic mode and UI checks.
+    pub t3: Option<T3Source>,
+    /// The T3 chat shown when the view is [`View::Remote`].
+    pub remote: Option<T3ChatRef>,
+    /// Show the T3 servers screen (Add environment and status).
+    pub show_environments: bool,
+    /// Which T3 projects are folded open in the sidebar, by (environment, project).
+    pub t3_open_projects: HashMap<(String, String), bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -240,6 +251,10 @@ impl BuknoApp {
             working_mark: crate::components::orb::Mark::from_env(),
             evidence: Evidence::from_env(),
             window_size: egui::Vec2::ZERO,
+            t3: None,
+            remote: None,
+            show_environments: false,
+            t3_open_projects: HashMap::new(),
         }
     }
 
@@ -259,7 +274,11 @@ impl BuknoApp {
         let coordinator =
             Coordinator::start(paths.clone(), store, tx, std::sync::Arc::new(move || repaint.request_repaint()));
         let scenario = Scenario::named("empty").expect("empty scenario");
-        Self::with_mode(ctx, Theme::load(), Mode::Real, scenario, paths, Backend::Coordinator(coordinator), rx)
+        let t3 = (std::env::var("BUKNO_T3").as_deref() != Ok("0")).then(|| T3Source::start(&paths.state_dir, ctx));
+        let mut app =
+            Self::with_mode(ctx, Theme::load(), Mode::Real, scenario, paths, Backend::Coordinator(coordinator), rx);
+        app.t3 = t3;
+        app
     }
 
     /// A window that only explains why Bukno cannot run.
@@ -296,6 +315,12 @@ impl BuknoApp {
             View::Chat if self.is_synthetic() => self.scenario.title,
             View::Chat => self.selected_summary().map_or("Chat", |c| c.title.as_str()),
             View::NewChat => "New chat",
+            View::Remote => self
+                .t3
+                .as_ref()
+                .and_then(|t| t.open_summary().map(|s| s.title.as_str()))
+                .or_else(|| self.t3.as_ref().and_then(|t| t.open_thread()).map(|t| t.title.as_str()))
+                .unwrap_or("Chat"),
         }
     }
 
@@ -341,11 +366,14 @@ impl BuknoApp {
             return;
         }
         self.flush_draft();
+        self.leave_remote();
         let current = self.take_current();
         match (self.view, self.selected) {
             (View::Chat, Some(previous)) => {
                 self.stash.insert(previous, current);
             }
+            // A T3 chat has no local state to keep.
+            (View::Remote, _) => {}
             // The new-chat composer's draft is kept in memory for the next new chat.
             _ => {
                 self.stash.insert(NEW_CHAT, current);
@@ -367,9 +395,11 @@ impl BuknoApp {
     /// Show the new-chat screen, optionally in a project.
     pub fn new_chat(&mut self, project: Option<ProjectId>) {
         self.flush_draft();
-        if self.view == View::Chat {
+        let was_remote = self.view == View::Remote;
+        self.leave_remote();
+        if self.view == View::Chat || was_remote {
             let current = self.take_current();
-            if let Some(previous) = self.selected {
+            if let (View::Chat, Some(previous)) = (self.view, self.selected) {
                 self.stash.insert(previous, current);
             }
             let fresh = self.stash.remove(&NEW_CHAT).unwrap_or_default();
@@ -378,6 +408,62 @@ impl BuknoApp {
         self.view = View::NewChat;
         self.new_chat_project = project;
         self.menu = None;
+    }
+
+    /// Show a chat that lives on a T3 server. Read only: the composer is
+    /// replaced by a note, and the local chat's draft is kept for later.
+    pub fn select_remote(&mut self, chat: T3ChatRef) {
+        if self.view == View::Remote && self.remote.as_ref() == Some(&chat) {
+            return;
+        }
+        self.flush_draft();
+        match (self.view, self.selected) {
+            (View::Chat, Some(previous)) => {
+                let current = self.take_current();
+                self.stash.insert(previous, current);
+            }
+            (View::NewChat, _) => {
+                let current = self.take_current();
+                self.stash.insert(NEW_CHAT, current);
+            }
+            _ => {}
+        }
+        self.put_current(ChatState::default());
+        self.view = View::Remote;
+        self.menu = None;
+        self.doc = Document::default();
+        self.transcript = TranscriptView::default();
+        self.transcript.scroll_to_end();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.open_chat(chat.clone());
+        }
+        self.remote = Some(chat);
+    }
+
+    /// Stop following the open T3 chat when another chat is shown.
+    fn leave_remote(&mut self) {
+        if self.view != View::Remote {
+            return;
+        }
+        if let Some(t3) = self.t3.as_mut() {
+            t3.close_chat();
+        }
+        self.remote = None;
+    }
+
+    /// Read what the T3 client published, and keep the open chat's document current.
+    fn poll_t3(&mut self) {
+        let Some(t3) = self.t3.as_mut() else { return };
+        t3.poll();
+        if self.view != View::Remote {
+            return;
+        }
+        if let Some(rebuilt) = t3.sync_document(&mut self.doc)
+            && rebuilt
+            && self.transcript.is_following()
+        {
+            self.transcript.scroll_to_end();
+        }
     }
 
     // ----- Events ---------------------------------------------------------
@@ -449,7 +535,8 @@ impl BuknoApp {
                 self.chats = chats;
             }
             ViewUpdate::ConversationLoaded { task, items } => {
-                if self.selected == Some(task) {
+                // A late load for the local chat must not replace a T3 chat on screen.
+                if self.selected == Some(task) && self.view != View::Remote {
                     self.doc.load(&items);
                 }
             }
@@ -773,6 +860,7 @@ impl BuknoApp {
         let ctx = ui.ctx().clone();
         self.evidence.frame_start(&ctx);
         self.apply_events(&ctx);
+        self.poll_t3();
         self.on_close_request(&ctx);
         crate::components::update_keyboard_mode(&ctx);
 
@@ -786,6 +874,11 @@ impl BuknoApp {
         if needs_setup || self.show_setup {
             ui.painter().rect_filled(full, 0.0, self.theme.color.surface_canvas);
             screens::setup::show(self, ui, full);
+            return;
+        }
+        if self.show_environments && self.t3.is_some() {
+            ui.painter().rect_filled(full, 0.0, self.theme.color.surface_canvas);
+            screens::environments::show(self, ui, full);
             return;
         }
         self.shortcuts(&ctx);

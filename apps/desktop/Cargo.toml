@@ -14,6 +14,7 @@ bukno-core.workspace = true
 bukno-platform.workspace = true
 bukno-runtime.workspace = true
 bukno-storage.workspace = true
+bukno-t3-client.workspace = true
 rfd = "0.17"
 eframe = { workspace = true, features = ["wgpu", "accesskit", "default_fonts"] }
 egui.workspace = true
@@ -31,6 +32,8 @@ eframe = { workspace = true, features = ["wayland", "x11"] }
 serde_json.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "rt-multi-thread", "sync", "time", "macros"] }
+url = "2"
 rusqlite.workspace = true
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }

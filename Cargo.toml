@@ -7,6 +7,7 @@ members = [
     "crates/providers",
     "crates/storage",
     "crates/platform",
+    "crates/t3-client",
     "xtask",
 ]
 
@@ -23,6 +24,7 @@ bukno-runtime = { path = "crates/runtime" }
 bukno-providers = { path = "crates/providers" }
 bukno-storage = { path = "crates/storage" }
 bukno-platform = { path = "crates/platform" }
+bukno-t3-client = { path = "crates/t3-client" }
 
 eframe = { version = "0.36.2", default-features = false }
 egui = "0.36.2"

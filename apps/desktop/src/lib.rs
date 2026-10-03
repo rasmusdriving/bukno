@@ -6,6 +6,7 @@ pub mod components;
 pub mod evidence;
 pub mod navigation;
 pub mod screens;
+pub mod sources;
 pub mod theme;
 pub mod transcript;
 
