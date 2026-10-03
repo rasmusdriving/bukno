@@ -5,6 +5,9 @@ use crate::ids::{ItemId, RunId, TaskId};
 /// Outbox state of one user message (section 6, Message delivery).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryState {
+    /// Saved and waiting for a free slot, the workspace, or the user's go-ahead.
+    /// Nothing has been written to an engine.
+    Queued,
     /// Recorded locally; the engine write has not been confirmed yet.
     AboutToSend,
     /// Written to the engine, no acknowledgement yet.
@@ -15,7 +18,7 @@ pub enum DeliveryState {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Provider {
     Codex,
     Claude,

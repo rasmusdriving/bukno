@@ -310,9 +310,15 @@ impl SyntheticEngine {
         let inbox = self.inbox.clone();
         let scenario = self.scenario.clone();
         tokio::spawn(async move {
-            let send = |kind| inbox.send(Input::Engine(EngineEvent { connection_generation: GENERATION, kind }));
+            let send = |kind| {
+                inbox.send(Input::Engine(EngineEvent {
+                    provider: Provider::Codex,
+                    connection_generation: GENERATION,
+                    kind,
+                }))
+            };
             tokio::time::sleep(Duration::from_millis(120)).await;
-            if send(EngineEventKind::RunAccepted { run }).await.is_err() {
+            if send(EngineEventKind::RunAccepted { run, turn: format!("synthetic-{:x}", run.0) }).await.is_err() {
                 return;
             }
             if scenario.reply_words == 0 {
@@ -335,16 +341,25 @@ impl SyntheticEngine {
                     " "
                 };
                 let delta = format!("{sep}{word}");
-                if send(EngineEventKind::TextDelta { run, item: reply, delta }).await.is_err() {
+                if send(EngineEventKind::TextDelta { run, item: reply, provider_item: "synthetic".into(), delta })
+                    .await
+                    .is_err()
+                {
                     return;
                 }
                 tokio::time::sleep(scenario.word_interval).await;
             }
             let outcome = if stop.load(Ordering::Relaxed) { RunOutcome::Interrupted } else { RunOutcome::Completed };
             if scenario.reply_words > 0 {
-                let _ = send(EngineEventKind::ItemCompleted { run, item: reply }).await;
+                let _ = send(EngineEventKind::ItemCompleted {
+                    run,
+                    item: reply,
+                    provider_item: "synthetic".into(),
+                    text: None,
+                })
+                .await;
             }
-            let _ = send(EngineEventKind::RunEnded { run, outcome }).await;
+            let _ = send(EngineEventKind::RunEnded { run, outcome, reason: None }).await;
         });
     }
 

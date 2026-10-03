@@ -5,8 +5,10 @@
 //! executes the effects that [`machine::Machine::step`] returns, so the same
 //! logic runs unchanged in the app, in replay and in the end-to-end harness.
 
+pub mod decision;
 pub mod event;
 pub mod ids;
 pub mod machine;
 pub mod message;
 pub mod run;
+pub mod task;

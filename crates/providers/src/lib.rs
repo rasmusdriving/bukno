@@ -1,4 +1,8 @@
-//! Engine adapters: the Codex app-server adapter (Pass 1) and the Claude
-//! bridge adapter (Pass 2).
+//! Engine adapters: the Codex app-server adapter (Pass 1) and, in Pass 2,
+//! the Claude bridge adapter.
 //!
-//! Empty in Pass 0. Pass 0 makes no engine connections.
+//! Adapters report what the engine says and do what the coordinator asks.
+//! They never choose which chat is selected or substitute another model or
+//! provider after an error.
+
+pub mod codex;

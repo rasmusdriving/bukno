@@ -4,7 +4,9 @@
 //! An operation a platform does not implement yet returns an explicit
 //! unavailable result instead of pretending to succeed.
 
+pub mod discovery;
 pub mod paths;
+pub mod process;
 
 #[cfg(target_os = "macos")]
 mod macos;

@@ -7,8 +7,14 @@ publish.workspace = true
 
 [dependencies]
 bukno-core.workspace = true
-tokio = { workspace = true, features = ["macros"] }
-uuid = { version = "1.26", features = ["v4"] }
+bukno-platform.workspace = true
+bukno-providers.workspace = true
+bukno-storage.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+tokio = { workspace = true, features = ["macros", "process"] }
+toml = { version = "1.1", default-features = false, features = ["parse", "display", "serde"] }
+uuid.workspace = true
 
 [lints]
 workspace = true

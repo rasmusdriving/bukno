@@ -33,3 +33,32 @@ id_type!(
     /// One transcript item: a user message or an agent reply.
     ItemId
 );
+id_type!(
+    /// A folder Bukno runs work in: a project's checkout or a projectless chat folder.
+    WorkspaceId
+);
+id_type!(
+    /// A project the user added to the sidebar.
+    ProjectId
+);
+id_type!(
+    /// One approval or question the engine is waiting on.
+    DecisionId
+);
+
+macro_rules! id_text {
+    ($($name:ident),*) => {$(
+        impl $name {
+            /// The identifier as 32 lowercase hex digits, for storage and wire IDs.
+            pub fn hex(self) -> String {
+                format!("{:032x}", self.0)
+            }
+
+            pub fn from_hex(text: &str) -> Option<Self> {
+                u128::from_str_radix(text, 16).ok().map(Self)
+            }
+        }
+    )*};
+}
+
+id_text!(TaskId, RunId, MessageId, ItemId, WorkspaceId, ProjectId, DecisionId);

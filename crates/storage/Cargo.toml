@@ -7,6 +7,9 @@ publish.workspace = true
 
 [dependencies]
 bukno-core.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

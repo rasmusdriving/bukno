@@ -20,6 +20,10 @@ pub enum Icon {
     Dots,
     Copy,
     Close,
+    /// Filled circle with an exclamation mark: needs you.
+    Alert,
+    Check,
+    Refresh,
     /// Placeholder Codex mark from the design system. Replace before release.
     Hexagon,
     /// Placeholder Claude mark from the design system. Replace before release.
@@ -109,6 +113,23 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, size: f32, color: Color3
         Icon::Close => {
             line(&[p(4.0, 4.0), p(12.0, 12.0)]);
             line(&[p(12.0, 4.0), p(4.0, 12.0)]);
+        }
+        Icon::Alert => {
+            painter.circle_filled(p(8.0, 8.0), 6.25 * s, color);
+            let ink = Color32::from_rgb(0x23, 0x22, 0x20);
+            painter.line_segment([p(8.0, 4.6), p(8.0, 8.9)], Stroke::new(1.6 * s, ink));
+            painter.circle_filled(p(8.0, 11.2), 0.95 * s, ink);
+        }
+        Icon::Check => line(&[p(3.5, 8.25), p(6.75, 11.5), p(12.5, 4.75)]),
+        Icon::Refresh => {
+            let arc: Vec<Pos2> = (0..=20)
+                .map(|i| {
+                    let a = -0.35 + i as f32 / 20.0 * 5.2;
+                    p(8.0 + 5.0 * a.cos(), 8.0 + 5.0 * a.sin())
+                })
+                .collect();
+            line(&arc);
+            line(&[p(13.0, 2.75), p(13.0, 6.25), p(9.5, 6.25)]);
         }
         Icon::Hexagon => {
             let pts = (0..6)

@@ -28,18 +28,20 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use bukno_core::event::ViewUpdate;
-use bukno_core::ids::{ItemId, RunId};
+use bukno_core::decision::{DecisionKind, DecisionState, DecisionView};
+use bukno_core::event::{ChatActivity, ChatSummary, PersistRequest, ViewUpdate};
+use bukno_core::ids::{DecisionId, ItemId, RunId, TaskId, WorkspaceId};
 use bukno_core::message::{ItemKind, Provider, TranscriptItem};
 use bukno_core::run::RunState;
-use bukno_desktop::app::{Backend, BuknoApp};
+use bukno_core::task::{TaskInfo, WorkspaceInfo, WorkspaceKind};
+use bukno_desktop::app::{Backend, BuknoApp, Mode};
 use bukno_desktop::components::composer::composer_id;
 use bukno_desktop::theme::Theme;
 use bukno_desktop::transcript::selection::{Selection, TextPos};
 use bukno_desktop::transcript::transcript_id;
 use bukno_platform::paths::AppPaths;
 use bukno_runtime::synthetic::{self, GenBlock, Scenario};
-use bukno_runtime::{UiCommand, UiEvent};
+use bukno_runtime::{SetupView, UiCommand, UiEvent};
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers, MouseWheelUnit, OutputCommand, PointerButton, Pos2, TouchPhase, Vec2, ViewportId};
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -94,6 +96,54 @@ impl Check {
             check.send(ViewUpdate::ConversationLoaded { task: synthetic::TASK, items: history });
         }
         check
+    }
+
+    /// The app in real mode, with events standing in for the coordinator.
+    fn real(name: &str, size: [f32; 2]) -> Self {
+        let (events, rx) = mpsc::channel();
+        let (cmd_tx, commands) = mpsc::channel();
+        let dir = evidence_root().join(name);
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let paths = AppPaths { state_dir: dir.join("state"), work_dir: Some(work.clone()), overridden: true };
+        let harness = Harness::builder()
+            .with_size(Vec2::from(size))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(10_000)
+            .with_step_dt(STEP_DT)
+            .wgpu()
+            .build_eframe(move |cc| {
+                let scenario = Scenario::named("empty").expect("scenario");
+                let mut app = BuknoApp::with_mode(
+                    &cc.egui_ctx,
+                    Theme::load(),
+                    Mode::Real,
+                    scenario,
+                    paths,
+                    Backend::Recorder(cmd_tx),
+                    rx,
+                );
+                app.reduce_motion = true;
+                app
+            });
+        let check = Self { harness, events, commands, stream_words: 0, dir, log: Vec::new() };
+        check
+            .events
+            .send(UiEvent::Setup(SetupView {
+                work_folder: Some(work.display().to_string()),
+                work_folder_missing: false,
+                state_dir: "fixture".into(),
+                overridden: true,
+                preset: "codex.workspace-write.untrusted".into(),
+            }))
+            .unwrap();
+        check
+    }
+
+    /// Save a screenshot as evidence only, for checks without a committed snapshot.
+    fn picture(&mut self, name: &str) {
+        let image = self.harness.render().expect("render");
+        image.save(self.dir.join(format!("{name}.png"))).unwrap();
     }
 
     fn send(&self, update: ViewUpdate) {
@@ -1177,4 +1227,395 @@ fn review_short_window_layout() {
     c.shot("review-short-window-03-long-draft");
     c.record("send_rect", json!(format!("{send:?}")));
     c.finish(json!({ "status": "pass", "list": format!("{list:?}"), "send": format!("{send:?}") }));
+}
+
+// Checks added for the PR 2 review (Sol), numbered as in
+// e2e/scenarios/pass1-codex-failure-paths.md. C43 to C45 are replays in
+// crates/core/tests/replay.rs.
+//
+// C46 (P1) An empty saved draft lost its revision on relaunch, so later
+//     saves were refused by storage while the app showed them as saved.
+// C47 (P1) A new chat that opened after the user moved to another chat took
+//     that chat's draft.
+// C48 (P2) At the 640 x 480 minimum window an approval card was left out,
+//     so Allow once and Deny could not be reached.
+//
+// Second review pass (C49 is a replay):
+// C50 (P2) A message sent before the saved draft loaded stayed in the
+//     composer after it was accepted, so it could be sent twice.
+// C51 (P2) A question with choices and a text field was measured 40 points
+//     short, so its last field and the actions ran under the composer.
+// C52 (P2) Question cards taller than the window had no scrolling, so the
+//     first questions could not be reached.
+
+fn chat_summary(task: TaskId, title: &str) -> ChatSummary {
+    ChatSummary {
+        task,
+        title: title.into(),
+        provider: Provider::Codex,
+        project: None,
+        workspace: WorkspaceId(task.0 + 100),
+        path: format!("/work/{title}"),
+        available: true,
+        activity: ChatActivity::Idle,
+        shared_workspace: false,
+    }
+}
+
+fn draft_saves(c: &Check) -> Vec<(u64, String)> {
+    c.commands
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            UiCommand::SaveDraft { revision, text, .. } => Some((revision, text)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run frames of a headless app driven by the real coordinator until `until`.
+fn frames_until(app: &mut BuknoApp, ctx: &egui::Context, events: Vec<Event>, until: impl Fn(&BuknoApp) -> bool) {
+    let start = std::time::Instant::now();
+    let mut events = Some(events);
+    loop {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+            time: Some(start.elapsed().as_secs_f64()),
+            events: events.take().unwrap_or_default(),
+            ..Default::default()
+        };
+        // No renderer here, so drop the texture updates it would consume.
+        ctx.run_ui(raw, |ui| app.show(ui)).textures_delta.clear();
+        if until(app) {
+            return;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "the app did not reach the expected state");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// C46: a cleared draft keeps its revision across relaunch, through the real
+/// coordinator and SQLite, and typing before the saved draft loads is kept.
+#[test]
+fn review_empty_draft_keeps_its_revision() {
+    let dir = evidence_root().join("review-draft-revision");
+    let _ = std::fs::remove_dir_all(&dir);
+    let (state, work) = (dir.join("state"), dir.join("work"));
+    std::fs::create_dir_all(&work).unwrap();
+    let task = TaskId(0x5b5e_0000_0000_0000_0046_0000_0000_0001);
+    let workspace = WorkspaceInfo {
+        id: WorkspaceId(0x46),
+        path: work.display().to_string(),
+        key: vec!["review-draft-revision".into()],
+        kind: WorkspaceKind::Chat,
+        git_root: None,
+        identity: None,
+        available: true,
+    };
+    let info = TaskInfo {
+        id: task,
+        title: "Cleared draft".into(),
+        provider: Provider::Codex,
+        project: None,
+        workspace: workspace.id,
+        session: None,
+        created: 1,
+    };
+    // The state a sent or cleared draft leaves: no text, revision 40.
+    let mut store = bukno_storage::Store::open(&state).unwrap();
+    for request in [
+        PersistRequest::Workspace(workspace),
+        PersistRequest::Chat(info),
+        PersistRequest::Draft { task, revision: 40, text: String::new() },
+    ] {
+        bukno_storage::repository::apply(store.connection(), &request).unwrap();
+    }
+
+    let ctx = egui::Context::default();
+    let paths = AppPaths { state_dir: state.clone(), work_dir: Some(work), overridden: true };
+    let mut app = BuknoApp::real(&ctx, paths, store);
+    frames_until(&mut app, &ctx, vec![], |a| !a.chats.is_empty());
+    app.select_chat(task);
+    frames_until(&mut app, &ctx, vec![], |a| a.composer.revision == 40);
+    ctx.memory_mut(|m| m.request_focus(composer_id()));
+    frames_until(&mut app, &ctx, vec![], |_| true);
+    frames_until(&mut app, &ctx, vec![Event::Text("New draft after relaunch".into())], |_| true);
+    let typed = app.composer.revision;
+    assert!(typed > 40, "typing is numbered after the saved revision, got {typed}");
+    app.flush_draft();
+    frames_until(&mut app, &ctx, vec![], |a| a.extra.draft_saved == typed);
+    drop(app);
+    let mut store = bukno_storage::Store::open(&state).unwrap();
+    let saved: (String, i64) =
+        store.connection().query_row("SELECT text, revision FROM draft", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(
+        saved,
+        ("New draft after relaunch".to_owned(), typed as i64),
+        "storage holds what the app says it saved"
+    );
+    drop(store);
+
+    // Typing that starts before the saved draft arrives is kept and numbered after it.
+    let mut c = Check::real("review-draft-revision-early", [1440.0, 900.0]);
+    c.send(ViewUpdate::Chats { projects: vec![], chats: vec![chat_summary(task, "Cleared draft")] });
+    c.step(2);
+    c.app().select_chat(task);
+    c.type_in_composer("Typed early");
+    c.send(ViewUpdate::DraftLoaded { task, text: String::new(), revision: 40 });
+    c.step(2);
+    assert_eq!(c.app().composer.text, "Typed early");
+    assert_eq!(c.app().composer.revision, 41);
+    c.app().flush_draft();
+    let early = draft_saves(&c);
+    assert_eq!(early.last(), Some(&(41, "Typed early".to_owned())));
+
+    // C50: sent before the saved draft arrives, the message still leaves the composer when accepted.
+    let other = TaskId(0x5b5e_0000_0000_0000_0050_0000_0000_0001);
+    c.send(ViewUpdate::Chats {
+        projects: vec![],
+        chats: vec![chat_summary(task, "Cleared draft"), chat_summary(other, "Sent early")],
+    });
+    c.app().select_chat(other);
+    c.type_in_composer("Sent before the draft loaded");
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    c.send(ViewUpdate::DraftLoaded { task: other, text: String::new(), revision: 40 });
+    c.step(2);
+    c.send(ViewUpdate::ItemUpserted(TranscriptItem {
+        id: ItemId(0x50),
+        task: other,
+        run: None,
+        kind: ItemKind::UserMessage,
+        text: "Sent before the draft loaded".into(),
+        meta: None,
+        completed: true,
+        revision: 1,
+    }));
+    c.step(2);
+    assert_eq!(c.app().composer.text, "", "the sent message is not left behind to send again");
+    assert!(c.app().composer.revision > 41, "the cleared composer is numbered after the saved draft");
+    let result = json!({
+        "status": "pass",
+        "relaunch": { "loaded_revision": 40, "saved": saved.0, "saved_revision": saved.1 },
+        "typed_before_load": { "saves": format!("{early:?}") },
+        "sent_before_load": { "composer_after_acceptance": "" },
+    });
+    std::fs::write(dir.join("result.json"), serde_json::to_string_pretty(&result).unwrap()).unwrap();
+    c.finish(result);
+}
+
+/// C47: when a new chat opens after the user moved on, each chat keeps its own draft.
+#[test]
+fn review_new_chat_opens_after_navigation() {
+    let a = TaskId(0x5b5e_0000_0000_0000_0047_0000_0000_000a);
+    let b = TaskId(0x5b5e_0000_0000_0000_0047_0000_0000_000b);
+    let mut c = Check::real("review-new-chat-late-open", [1440.0, 900.0]);
+    c.send(ViewUpdate::Chats { projects: vec![], chats: vec![chat_summary(a, "Chat A")] });
+    c.step(2);
+    c.app().select_chat(a);
+    c.type_in_composer("Private draft from chat A");
+    c.app().new_chat(None);
+    c.step(2);
+    c.type_in_composer("First message of chat B");
+    c.harness.key_press(Key::Enter);
+    c.step(2);
+    let sent: Vec<String> = c
+        .commands
+        .try_iter()
+        .filter_map(|cmd| match cmd {
+            UiCommand::SubmitNew { body, .. } => Some(body),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec!["First message of chat B".to_owned()]);
+
+    // The user moves to chat A before the coordinator says the new chat opened.
+    c.app().select_chat(a);
+    c.step(1);
+    c.events.send(UiEvent::Opened { task: b }).unwrap();
+    c.send(ViewUpdate::Chats {
+        projects: vec![],
+        chats: vec![chat_summary(a, "Chat A"), chat_summary(b, "First message of chat B")],
+    });
+    c.step(2);
+    assert_eq!(c.app().selected, Some(a), "the user stays where they went");
+    assert_eq!(c.app().composer.text, "Private draft from chat A", "chat A keeps its draft");
+    let moved = c.app().stash.get(&b).map(|s| (s.composer.text.clone(), s.pending_submit.is_some()));
+    assert_eq!(moved, Some(("First message of chat B".to_owned(), true)), "the new chat's state went with it");
+    c.picture("review-new-chat-late-open-01-chat-a");
+
+    // Acceptance clears the sent text in the new chat only.
+    c.send(ViewUpdate::ItemUpserted(TranscriptItem {
+        id: ItemId(0x47),
+        task: b,
+        run: None,
+        kind: ItemKind::UserMessage,
+        text: "First message of chat B".into(),
+        meta: None,
+        completed: true,
+        revision: 1,
+    }));
+    c.step(2);
+    c.app().select_chat(b);
+    c.step(2);
+    assert_eq!(c.app().composer.text, "", "the sent message left the new chat's composer");
+    assert!(c.app().send_blocked().is_none(), "the new chat is not stuck sending");
+    c.app().select_chat(a);
+    c.step(2);
+    assert_eq!(c.app().composer.text, "Private draft from chat A");
+    c.finish(json!({ "status": "pass", "selected_after_late_open": "chat A", "chat_a_draft": "kept" }));
+}
+
+/// C48: at the smallest window an approval card's actions stay on screen and
+/// above the composer, also with a long command and a long draft.
+#[test]
+fn review_approval_fits_smallest_window() {
+    let task = TaskId(0x5b5e_0000_0000_0000_0048_0000_0000_0001);
+    let run = RunId(0x48);
+    let mut c = Check::real("review-approval-small-window", [640.0, 480.0]);
+    c.send(ViewUpdate::Chats { projects: vec![], chats: vec![chat_summary(task, "Approval")] });
+    c.step(2);
+    c.app().select_chat(task);
+    c.send(ViewUpdate::RunStateChanged { task, run, state: RunState::WaitingForApproval });
+    let card = |command: &str| ViewUpdate::Decisions {
+        task,
+        decisions: vec![DecisionView {
+            id: DecisionId(0x48),
+            task,
+            run,
+            generation: 1,
+            kind: DecisionKind::Command { command: command.into(), cwd: Some("/work/Approval".into()), reason: None },
+            state: DecisionState::Pending,
+        }],
+    };
+    let mut seen = Vec::new();
+    let cases = [
+        ("short command", "touch file.txt".to_owned(), String::new()),
+        (
+            "long command and long draft",
+            (1..=20).map(|i| format!("echo line {i} of a long script")).collect::<Vec<_>>().join("\n"),
+            (1..=15).map(|i| format!("Line {i} of a long direction\n")).collect(),
+        ),
+    ];
+    for (i, (name, command, draft)) in cases.into_iter().enumerate() {
+        c.send(card(&command));
+        if !draft.is_empty() {
+            c.harness.ctx.memory_mut(|m| m.request_focus(composer_id()));
+            c.step(1);
+            c.harness.event(Event::Paste(draft));
+        }
+        c.step(4);
+        let allow = c.harness.get_by_label("Allow once").rect();
+        let deny = c.harness.get_by_label("Deny").rect();
+        let composer_top = c.harness.get_all_by_label("Stop").map(|n| n.rect().top()).fold(f32::INFINITY, f32::min);
+        for (label, rect) in [("Allow once", allow), ("Deny", deny)] {
+            assert!(
+                rect.top() >= 0.0 && rect.bottom() <= 480.0 && rect.right() <= 640.0,
+                "{name}: {label} stays inside the window: {rect:?}"
+            );
+            assert!(rect.bottom() <= composer_top, "{name}: {label} sits above the composer: {rect:?}");
+        }
+        c.picture(&format!("review-approval-small-window-0{}", i + 1));
+        seen.push(json!({ "case": name, "allow": format!("{allow:?}"), "deny": format!("{deny:?}") }));
+    }
+    // The card can be answered from there.
+    c.harness.get_by_label("Allow once").click();
+    c.step(2);
+    let answered = c.commands.try_iter().any(|cmd| matches!(cmd, UiCommand::Answer { .. }));
+    assert!(answered, "Allow once sends an answer");
+    c.finish(json!({ "status": "pass", "cases": seen, "answered": answered }));
+}
+
+fn question_card(task: TaskId, run: RunId, choices: bool) -> ViewUpdate {
+    let questions = (1..=3)
+        .map(|i| bukno_core::decision::Question {
+            id: format!("q{i}"),
+            header: format!("Question {i}"),
+            text: format!("Please answer question {i} before work continues."),
+            options: if choices { vec!["Choice A".into(), "Choice B".into()] } else { vec![] },
+            other: choices,
+        })
+        .collect();
+    ViewUpdate::Decisions {
+        task,
+        decisions: vec![DecisionView {
+            id: DecisionId(0x51),
+            task,
+            run,
+            generation: 1,
+            kind: DecisionKind::Question { questions },
+            state: DecisionState::Pending,
+        }],
+    }
+}
+
+/// The card's answer fields, top to bottom (the composer is a text field too).
+fn text_inputs(c: &Check) -> Vec<egui::Rect> {
+    let composer = composer_id().accesskit_id();
+    c.harness
+        .get_all_by_role(Role::MultilineTextInput)
+        .filter(|n| n.accesskit_node().locate().0 != composer)
+        .map(|n| n.rect())
+        .collect()
+}
+
+/// C51 and C52: question cards keep every field and both actions reachable,
+/// at full size and in the smallest window.
+#[test]
+fn review_question_cards_fit() {
+    let task = TaskId(0x5b5e_0000_0000_0000_0051_0000_0000_0001);
+    let run = RunId(0x51);
+    let mut seen = Vec::new();
+    for (name, size, choices) in [
+        ("regular-choices", [1440.0, 900.0], true),
+        ("minimum-choices", [640.0, 480.0], true),
+        ("minimum-free", [640.0, 480.0], false),
+    ] {
+        let mut c = Check::real(&format!("review-question-cards-{name}"), size);
+        c.send(ViewUpdate::Chats { projects: vec![], chats: vec![chat_summary(task, "Questions")] });
+        c.step(2);
+        c.app().select_chat(task);
+        c.send(ViewUpdate::RunStateChanged { task, run, state: RunState::WaitingForInput });
+        c.send(question_card(task, run, choices));
+        c.step(4);
+        let composer_top = c.harness.get_all_by_label("Stop").map(|n| n.rect().top()).fold(f32::INFINITY, f32::min);
+        let (height, width) = (size[1], size[0]);
+        let reachable = |r: egui::Rect| r.top() >= 0.0 && r.bottom() <= composer_top && r.right() <= width;
+        for label in ["Send answer", "Skip"] {
+            let rect = c.harness.get_by_label(label).rect();
+            assert!(reachable(rect), "{name}: {label} is on screen above the composer: {rect:?}");
+        }
+        c.picture(&format!("review-question-cards-{name}-01"));
+        let inputs = text_inputs(&c);
+        let shown = inputs.iter().filter(|r| reachable(**r)).count();
+        if name == "regular-choices" {
+            assert_eq!(shown, 3, "{name}: every field fits at full size: {inputs:?}");
+        } else {
+            // The questions scroll inside the card: the first is at the top, the last one scrolls in.
+            assert!(inputs.first().is_some_and(|r| reachable(*r)), "{name}: the first field shows: {inputs:?}");
+            let area = c.harness.get_by_label("Send answer").rect();
+            c.harness.event(Event::PointerMoved(Pos2::new(width / 2.0, area.top() - 40.0)));
+            c.harness.event(Event::MouseWheel {
+                unit: MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -2000.0),
+                phase: TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            c.step(20);
+            let inputs = text_inputs(&c);
+            assert!(
+                inputs.last().is_some_and(|r| r.top() >= 0.0 && r.bottom() <= height),
+                "{name}: the last field scrolls into view: {inputs:?}"
+            );
+            c.picture(&format!("review-question-cards-{name}-02-scrolled"));
+        }
+        seen.push(json!({ "case": name, "fields_on_screen_at_start": shown }));
+        c.finish(json!({ "status": "pass", "case": name, "fields_on_screen_at_start": shown }));
+    }
+    let dir = evidence_root().join("review-question-cards");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("result.json"),
+        serde_json::to_string_pretty(&json!({ "status": "pass", "cases": seen })).unwrap(),
+    )
+    .unwrap();
 }

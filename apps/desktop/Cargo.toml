@@ -13,6 +13,8 @@ path = "src/main.rs"
 bukno-core.workspace = true
 bukno-platform.workspace = true
 bukno-runtime.workspace = true
+bukno-storage.workspace = true
+rfd = "0.17"
 eframe = { workspace = true, features = ["wgpu", "accesskit", "default_fonts"] }
 egui.workspace = true
 png = "0.18"
@@ -26,6 +28,7 @@ libc = "0.2"
 serde_json.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 
