@@ -16,7 +16,7 @@ use crate::components::{icon_button, provider_color, provider_name};
 use crate::transcript::column_rect;
 
 /// Height reserved after the last message for the working indicator.
-const WORKING_HEIGHT: f32 = 56.0;
+pub(crate) const WORKING_HEIGHT: f32 = 56.0;
 /// Transcript space left beside a decision card in a small window.
 const DECISION_TRANSCRIPT_MIN: f32 = 16.0;
 /// Shortest a question card gets: its actions plus room to scroll the questions.
@@ -102,7 +102,7 @@ pub fn titlebar(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect, sidebar_shown: bo
                 c.text_tertiary,
             );
         }
-        View::NewChat => {
+        View::NewChat | View::Remote => {
             icons::paint(
                 painter,
                 Rect::from_center_size(pos2(x + 7.0, bar.center().y), vec2(14.0, 14.0)),
@@ -134,6 +134,18 @@ fn breadcrumb(app: &BuknoApp) -> (bool, String) {
     let project = match app.view {
         View::Chat => app.selected_summary().and_then(|s| s.project),
         View::NewChat => app.new_chat_project,
+        View::Remote => {
+            // The T3 server's label and the project, such as "Ubuntu-box / bukno".
+            let t3 = app.t3.as_ref();
+            let chat = app.remote.as_ref();
+            let env = t3.zip(chat).and_then(|(t, r)| t.environment(&r.environment));
+            let project = env.and_then(|e| {
+                let thread = e.threads.iter().find(|t| Some(&t.id) == chat.map(|r| &r.thread))?;
+                e.projects.iter().find(|p| p.id == thread.project_id).map(|p| p.title.clone())
+            });
+            let label = env.map_or("T3", |e| e.saved.label.as_str());
+            return (false, project.map_or_else(|| label.to_owned(), |p| format!("{label} / {p}")));
+        }
     };
     match project.and_then(|p| app.projects.iter().find(|x| x.id == p)) {
         Some(project) => (false, project.name.clone()),
@@ -146,6 +158,7 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect) {
     match app.view {
         View::NewChat => new_chat(app, ui, body),
         View::Chat => chat(app, ui, body),
+        View::Remote => super::remote::chat(app, ui, body),
     }
 }
 
@@ -455,7 +468,7 @@ fn project_menu(app: &mut BuknoApp, ui: &mut Ui, anchor: Rect) {
 
 /// A docked notice above the composer, with up to three actions. Returns the
 /// clicked action's index.
-fn notice_card(
+pub(crate) fn notice_card(
     ui: &mut Ui,
     theme: &crate::theme::Theme,
     rect: Rect,
@@ -491,7 +504,7 @@ fn notice_card(
     clicked
 }
 
-fn notice_height(ui: &Ui, theme: &crate::theme::Theme, width: f32, text: &str, actions: usize) -> f32 {
+pub(crate) fn notice_height(ui: &Ui, theme: &crate::theme::Theme, width: f32, text: &str, actions: usize) -> f32 {
     let mut job = theme.job(text, &theme.text.t_ui, theme.color.text_primary, width - 52.0);
     job.wrap.max_rows = 3;
     let h = ui.painter().layout_job(job).size().y;

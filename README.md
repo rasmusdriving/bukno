@@ -2,11 +2,12 @@
 
 A lightweight, open-source native interface for Codex and Claude Code. Pronounced “Buck-no”: build + knowledge. Pass 1 built: the Mac app runs real Codex chats, with or without a project, through your existing Codex login. Claude arrives in Pass 2.
 
-The [3 October T3 backend audit](docs/t3-backend-audit.md) proposes keeping the
-Rust interface and reusing T3's server. It covers Tailscale, T3 Connect, local
-Codex/Claude plugin management, ownership changes and delivery gates. That
-migration is not implemented. [Ubuntu setup](docs/ubuntu.md) covers the current
-native app and its separate portability verification.
+Bukno is moving to T3's server as its backend while keeping the Rust interface
+([decision 37](docs/decisions.md), [T3 backend plan](docs/t3-backend-audit.md)).
+Stage 1 is built: Bukno pairs with a T3 server and shows its projects, chats
+and models, live and read only. It cannot send, approve or stop anything yet.
+See [the read-only check](e2e/scenarios/t3-read-only.md). The direct Codex path
+still works unchanged. [Ubuntu setup](docs/ubuntu.md) covers the native app on Ubuntu.
 
 ## Agreed architecture
 
@@ -66,7 +67,10 @@ and both live Codex scenarios passed on 3 October with Codex 0.160.0, including
 approvals, Stop, restart/resume, draft persistence and engine cleanup. See
 [Ubuntu evidence and limitations](docs/ubuntu.md). Claude, voice and dictation
 have not been tested end to end, and Windows has only been compile-checked.
-The T3 frontend and plugin manager are proposed. Memory figures in the plan
+On 3 October the read-only T3 client passed its live end-to-end check against
+the Ubuntu T3 server (pairing, lists, a 362-row chat, paged history, live
+updates, network loss, restart, unknown message types, revocation). Sending
+through T3 is Stage 2. The plugin manager is proposed. Memory figures in the plan
 remain targets or observations from the existing desktop app, not new Bukno
 versus T3 benchmark results.
 

@@ -12,6 +12,7 @@ use crate::app::{BuknoApp, View};
 use crate::components::icons::Icon;
 use crate::components::rows::{self, Row, Trailing, Usage};
 use crate::components::{command_key, composer::composer_id, icon_button};
+use crate::sources::{T3ChatRef, provider_of, status_words};
 
 /// Below this conversation width the sidebar collapses (the right panel,
 /// when it exists, collapses first).
@@ -278,6 +279,12 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
     let mut select = None;
     let mut new_in = None;
     let mut add_project = false;
+    let t3_environments = app.t3.as_ref().map(|t| t.view.environments.clone());
+    let selected_remote = (app.view == View::Remote).then(|| app.remote.clone()).flatten();
+    let t3_open = app.t3_open_projects.clone();
+    let mut select_remote = None;
+    let mut toggle_t3 = None;
+    let mut open_environments = false;
     egui::ScrollArea::vertical().id_salt("nav-list").auto_shrink([false, false]).show(&mut list_ui, |ui| {
         ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
         let next = |ui: &mut Ui, height: f32| {
@@ -375,9 +382,137 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
                 select = Some(chat.task);
             }
         }
+
+        // Chats on T3 servers, read only, grouped by server and project.
+        if let Some(environments) = &t3_environments {
+            next(ui, theme.space.space_6 - 10.0);
+            let label = next(ui, 27.0);
+            rows::section_label(ui, &theme, Rect::from_min_size(label.min, vec2(width, 28.0)), "T3");
+            let add = Rect::from_center_size(pos2(left + width - 12.0, label.center().y), vec2(24.0, 24.0));
+            if icon_button(ui, &theme, Id::new("nav-add-t3"), add, Icon::Plus, "Add a T3 server").clicked() {
+                open_environments = true;
+            }
+            if environments.is_empty() {
+                let hint = next(ui, row_h);
+                ui.painter().text(
+                    pos2(hint.left() + 12.0, hint.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    "Connect a T3 server to see its chats",
+                    theme.font(&theme.text.t_small),
+                    c.text_tertiary,
+                );
+            }
+            for env in environments {
+                let id = &env.saved.environment_id;
+                let (words, problem) = status_words(&env.status);
+                let title = format!("{} · {words}", env.saved.label);
+                let row = next(ui, row_h + 2.0);
+                let response = rows::row(
+                    ui,
+                    &theme,
+                    Rect::from_min_size(row.min, vec2(width, row_h)),
+                    Row {
+                        id: Id::new(("nav-t3-env", id)),
+                        title: &title,
+                        lead: None,
+                        trailing: if problem { Trailing::Alert } else { Trailing::None },
+                        selected: false,
+                        child: false,
+                        label: Some(format!("T3 server {}, {words}. Opens its settings", env.saved.label)),
+                    },
+                );
+                if response.clicked() {
+                    open_environments = true;
+                }
+                for project in &env.projects {
+                    let key = (id.clone(), project.id.clone());
+                    let open = t3_open.get(&key).copied().unwrap_or(true);
+                    let row = next(ui, row_h + 2.0);
+                    let header = Rect::from_min_size(row.min, vec2(width, row_h));
+                    if rows::project_row(
+                        ui,
+                        &theme,
+                        header,
+                        Id::new(("nav-t3-project", id, &project.id)),
+                        &project.title,
+                        open,
+                    )
+                    .clicked()
+                    {
+                        toggle_t3 = Some((key, !open));
+                    }
+                    if !open {
+                        continue;
+                    }
+                    // Delegated chats sit under their parent in T3; this stage lists
+                    // top-level chats only and counts the children in the label.
+                    for thread in
+                        env.threads.iter().filter(|t| t.project_id == project.id && t.parent_thread_id().is_none())
+                    {
+                        let children =
+                            env.threads.iter().filter(|c| c.parent_thread_id() == Some(thread.id.as_str())).count();
+                        let chat = T3ChatRef { environment: id.clone(), thread: thread.id.clone() };
+                        let selected = selected_remote.as_ref() == Some(&chat);
+                        let provider = provider_of(thread.model_selection.instance());
+                        let active = thread.activity_run_status.is_some();
+                        let trailing = if thread.pending_runtime_request.is_some() {
+                            Trailing::Alert
+                        } else if active {
+                            Trailing::Working(provider)
+                        } else {
+                            Trailing::Mark(provider)
+                        };
+                        let words = if thread.pending_runtime_request.is_some() {
+                            ", needs you in T3"
+                        } else if active {
+                            ", working"
+                        } else {
+                            ""
+                        };
+                        let row = next(ui, row_h + 2.0);
+                        let response = rows::row(
+                            ui,
+                            &theme,
+                            Rect::from_min_size(row.min, vec2(width, row_h)),
+                            Row {
+                                id: Id::new(("nav-t3-chat", id, &thread.id)),
+                                title: &thread.title,
+                                lead: None,
+                                trailing,
+                                selected,
+                                child: true,
+                                label: Some(format!(
+                                    "{}, {} chat on {}, read only{words}{}",
+                                    thread.title,
+                                    crate::components::provider_name(provider),
+                                    env.saved.label,
+                                    match children {
+                                        0 => String::new(),
+                                        1 => ", with 1 delegated chat".to_owned(),
+                                        n => format!(", with {n} delegated chats"),
+                                    }
+                                )),
+                            },
+                        );
+                        if response.clicked() {
+                            select_remote = Some(chat);
+                        }
+                    }
+                }
+            }
+        }
     });
     if let Some(task) = select {
         app.select_chat(task);
+    }
+    if let Some(chat) = select_remote {
+        app.select_remote(chat);
+    }
+    if let Some((key, open)) = toggle_t3 {
+        app.t3_open_projects.insert(key, open);
+    }
+    if open_environments {
+        app.show_environments = true;
     }
     if let Some(project) = new_in {
         app.new_chat(Some(project));

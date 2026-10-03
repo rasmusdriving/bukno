@@ -2,10 +2,24 @@
 
 Goal: real Codex and Claude text workflows in the Mac app, finished to daily-driver quality, with Windows completed before public release. Dictation and live voice follow through Codex app-server and do not block day one.
 
-On 3 October 2026, Rasmus requested an audit of using T3's backend and adding
-Ubuntu support. See the [proposed replacement backend plan](t3-backend-audit.md)
-and [Ubuntu verification](ubuntu.md). The passes below describe the existing
-direct-provider implementation; they do not establish a working T3 client.
+On 3 October 2026 the T3 backend was agreed ([decision 37](decisions.md)). The
+passes below describe the existing direct-provider implementation. Pass 2 (the
+Claude bridge), Bukno's own delegation engine and the remaining direct-Codex
+failure rows are paused; T3 replaces them. The T3 stages follow.
+
+## T3 Stage 1: read-only client
+
+- [x] Record the decision and pause the replaced work ([decision 37](decisions.md)).
+- [x] Write the failure cases first: [t3-client-failure-paths.md](../e2e/scenarios/t3-client-failure-paths.md).
+- [x] `crates/t3-client`: identity and protocol check, pairing with a read-only scope, keychain storage, socket tickets, Effect RPC framing with acknowledgements and pings, shell and thread subscriptions with `afterSequence` resume, history pages, unknown types kept visible, pinned revision and recorded fixtures ([PINNED.md](../crates/t3-client/PINNED.md)).
+- [x] One connection layer in the app (`apps/desktop/src/sources.rs`): T3 chats carry their server ID; the direct Codex path is unchanged.
+- [x] Add environment screen with status and models.
+- [x] Live end-to-end check against the Ubuntu server: [t3-read-only.md](../e2e/scenarios/t3-read-only.md).
+- [ ] Sol reviews Stage 1.
+
+## T3 Stage 2: full text flow (next)
+
+- [ ] Send, stream, approve or deny, Stop, queue and steer, resume, for Codex and Claude through T3. Then confirm the T3 route and rewrite the backend specification.
 
 This is a checklist. The [first version specification](first-version-specification.md) defines what each item means, the pass it lands in, and its acceptance evidence; where this list and the specification differ, the specification wins ([decision 31](decisions.md)). Claude builds the foundation and Sol reviews each pass ([decision 34](decisions.md)).
 
