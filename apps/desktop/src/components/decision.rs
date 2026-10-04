@@ -37,6 +37,7 @@ fn title(kind: &DecisionKind, provider: &str) -> String {
         DecisionKind::FileChange { files, .. } if files.len() == 1 => format!("{provider} wants to change a file"),
         DecisionKind::FileChange { .. } => format!("{provider} wants to change files"),
         DecisionKind::Question { .. } => format!("{provider} has a question"),
+        DecisionKind::Access { what, .. } => format!("{provider} asks to {what}"),
     }
 }
 
@@ -44,6 +45,7 @@ fn title(kind: &DecisionKind, provider: &str) -> String {
 fn body(kind: &DecisionKind) -> Option<String> {
     match kind {
         DecisionKind::Command { command, .. } => Some(command.clone()),
+        DecisionKind::Access { detail, .. } => detail.clone(),
         DecisionKind::FileChange { files, .. } if !files.is_empty() => {
             let mut shown: Vec<String> = files.iter().take(MAX_FILES).cloned().collect();
             if files.len() > MAX_FILES {
@@ -58,7 +60,7 @@ fn body(kind: &DecisionKind) -> Option<String> {
 fn reason(kind: &DecisionKind) -> Option<&str> {
     match kind {
         DecisionKind::Command { reason, .. } | DecisionKind::FileChange { reason, .. } => reason.as_deref(),
-        DecisionKind::Question { .. } => None,
+        DecisionKind::Question { .. } | DecisionKind::Access { .. } => None,
     }
 }
 

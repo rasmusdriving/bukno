@@ -237,6 +237,9 @@ pub fn space_before(doc: &Document, index: usize, theme: &Theme) -> f32 {
     space
 }
 
+/// Room for a caption under a user message.
+pub const USER_CAPTION: f32 = 22.0;
+
 fn style_for<'a>(theme: &'a Theme, kind: &BlockKind) -> &'a crate::theme::TypeStyle {
     match kind {
         BlockKind::Heading(_) => &theme.text.t_heading,
@@ -294,7 +297,14 @@ fn lay_out(
         (Role::User, _) => {
             let bubble = vec2(size.x + 2.0 * USER_PAD.x, size.y + 2.0 * USER_PAD.y);
             let min = pos2(width - bubble.x, before);
-            (min.to_vec2() + USER_PAD, Some(Rect::from_min_size(min, bubble)), before + bubble.y, size.x)
+            let message = doc.message_of(index);
+            // A caption under the last bubble, such as "Queued for the next turn".
+            let caption = if message.meta.is_some() && message.first_block + message.block_count == index + 1 {
+                USER_CAPTION
+            } else {
+                0.0
+            };
+            (min.to_vec2() + USER_PAD, Some(Rect::from_min_size(min, bubble)), before + bubble.y + caption, size.x)
         }
         (_, BlockKind::Code { .. }) => {
             let frame = Rect::from_min_size(

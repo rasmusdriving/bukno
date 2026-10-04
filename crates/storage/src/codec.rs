@@ -119,6 +119,7 @@ pub fn decision_kind(kind: &DecisionKind) -> String {
             "type": "question",
             "questions": questions.iter().map(question).collect::<Vec<_>>(),
         }),
+        DecisionKind::Access { what, detail } => json!({"type": "access", "what": what, "detail": detail}),
     }
     .to_string()
 }

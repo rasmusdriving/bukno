@@ -11,8 +11,9 @@
 //! - A stream sends one `Chunk` and waits for the client's `Ack` before the
 //!   next. The client pings every 5 s; 3 missed pongs mean the socket is dead.
 //!
-//! The only requests this module can send are the read-only methods in
-//! [`ReadOnlyMethod`]; the frame writer refuses any other tag as well.
+//! The only requests this module can send are the methods in [`Method`]: the
+//! three reads, plus the two command methods that need the
+//! `orchestration:operate` scope. The frame writer refuses any other tag.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,23 +33,35 @@ const PING_EVERY: Duration = Duration::from_secs(5);
 const MISSED_PONGS_LIMIT: u32 = 3;
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Every RPC method this client may call. All need only `orchestration:read`.
+/// Every RPC method this client may call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadOnlyMethod {
+pub enum Method {
     GetConfig,
     SubscribeShell,
     SubscribeThread,
+    /// One command from [`crate::command`]. Needs `orchestration:operate`.
+    DispatchCommand,
+    /// A new chat with its first message. Needs `orchestration:operate`.
+    LaunchThread,
 }
 
-impl ReadOnlyMethod {
-    pub const ALL: [Self; 3] = [Self::GetConfig, Self::SubscribeShell, Self::SubscribeThread];
+impl Method {
+    pub const ALL: [Self; 5] =
+        [Self::GetConfig, Self::SubscribeShell, Self::SubscribeThread, Self::DispatchCommand, Self::LaunchThread];
 
     pub fn tag(self) -> &'static str {
         match self {
             Self::GetConfig => "server.getConfig",
             Self::SubscribeShell => "orchestration.subscribeShell",
             Self::SubscribeThread => "orchestration.subscribeThread",
+            Self::DispatchCommand => "orchestration.dispatchCommand",
+            Self::LaunchThread => "orchestration.launchThread",
         }
+    }
+
+    /// Whether the method changes anything on the server.
+    pub fn operates(self) -> bool {
+        matches!(self, Self::DispatchCommand | Self::LaunchThread)
     }
 }
 
@@ -71,23 +84,10 @@ pub enum StreamEvent {
 }
 
 enum Command {
-    Call {
-        method: ReadOnlyMethod,
-        payload: Value,
-        reply: oneshot::Sender<Result<Value, T3Error>>,
-    },
-    Subscribe {
-        method: ReadOnlyMethod,
-        payload: Value,
-        events: mpsc::UnboundedSender<StreamEvent>,
-        id: oneshot::Sender<u64>,
-    },
-    Ack {
-        id: u64,
-    },
-    Interrupt {
-        id: u64,
-    },
+    Call { method: Method, payload: Value, reply: oneshot::Sender<Result<Value, T3Error>> },
+    Subscribe { method: Method, payload: Value, events: mpsc::UnboundedSender<StreamEvent>, id: oneshot::Sender<u64> },
+    Ack { id: u64 },
+    Interrupt { id: u64 },
 }
 
 enum Pending {
@@ -103,9 +103,30 @@ pub struct Session {
     pub stats: Arc<SessionStats>,
 }
 
+/// A cloneable handle for one-shot calls on a session, so a command can wait
+/// for its reply in its own task while the streams keep flowing.
+#[derive(Clone)]
+pub struct Caller {
+    commands: mpsc::UnboundedSender<Command>,
+}
+
+impl Caller {
+    pub async fn call(&self, method: Method, payload: Value) -> Result<Value, T3Error> {
+        call(&self.commands, method, payload).await
+    }
+}
+
+async fn call(commands: &mpsc::UnboundedSender<Command>, method: Method, payload: Value) -> Result<Value, T3Error> {
+    let (reply, rx) = oneshot::channel();
+    commands
+        .send(Command::Call { method, payload, reply })
+        .map_err(|_| T3Error::Disconnected { detail: "the socket is closed".into() })?;
+    rx.await.map_err(|_| T3Error::Disconnected { detail: "the socket closed before the reply".into() })?
+}
+
 /// A live stream. Dropping it sends `Interrupt` if the stream is still open.
 pub struct Subscription {
-    pub method: ReadOnlyMethod,
+    pub method: Method,
     id: u64,
     events: mpsc::UnboundedReceiver<StreamEvent>,
     commands: mpsc::UnboundedSender<Command>,
@@ -212,15 +233,15 @@ impl Session {
         Ok(Self { commands, closed, stats })
     }
 
-    pub async fn call(&self, method: ReadOnlyMethod, payload: Value) -> Result<Value, T3Error> {
-        let (reply, rx) = oneshot::channel();
-        self.commands
-            .send(Command::Call { method, payload, reply })
-            .map_err(|_| T3Error::Disconnected { detail: "the socket is closed".into() })?;
-        rx.await.map_err(|_| T3Error::Disconnected { detail: "the socket closed before the reply".into() })?
+    pub async fn call(&self, method: Method, payload: Value) -> Result<Value, T3Error> {
+        call(&self.commands, method, payload).await
     }
 
-    pub async fn subscribe(&self, method: ReadOnlyMethod, payload: Value) -> Result<Subscription, T3Error> {
+    pub fn caller(&self) -> Caller {
+        Caller { commands: self.commands.clone() }
+    }
+
+    pub async fn subscribe(&self, method: Method, payload: Value) -> Result<Subscription, T3Error> {
         let (events_tx, events) = mpsc::unbounded_channel();
         let (id_tx, id_rx) = oneshot::channel();
         self.commands
@@ -245,7 +266,7 @@ async fn run(
     log: Log,
 ) {
     let (mut sink, mut stream) = socket.split();
-    let mut pending: HashMap<u64, (ReadOnlyMethod, Pending)> = HashMap::new();
+    let mut pending: HashMap<u64, (Method, Pending)> = HashMap::new();
     let mut next_id: u64 = 0;
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -405,14 +426,21 @@ async fn run(
     let _ = closed.send(Some(reason));
 }
 
-/// Build a request frame. Refuses any tag outside the read-only list, which
-/// the types already rule out; this is the last check before the socket.
-fn request(id: u64, method: ReadOnlyMethod, payload: Value, log: &Log) -> Option<Value> {
+/// Build a request frame. Refuses any tag outside [`Method`], which the types
+/// already rule out; this is the last check before the socket. Command
+/// payloads carry chat text, so only their type and command ID are logged.
+fn request(id: u64, method: Method, payload: Value, log: &Log) -> Option<Value> {
     let tag = method.tag();
-    if !ReadOnlyMethod::ALL.iter().any(|m| m.tag() == tag) {
-        log(&format!("rpc: refused to send {tag}, which is not a read-only method"));
+    if !Method::ALL.iter().any(|m| m.tag() == tag) {
+        log(&format!("rpc: refused to send {tag}, which is not a known method"));
         return None;
     }
-    log(&format!("rpc: send request {id} {tag} {}", payload));
+    if method.operates() {
+        let kind = payload.get("type").and_then(Value::as_str).unwrap_or("launch");
+        let command = payload.get("commandId").and_then(Value::as_str).unwrap_or("?");
+        log(&format!("rpc: send request {id} {tag} {kind} command {command}"));
+    } else {
+        log(&format!("rpc: send request {id} {tag} {payload}"));
+    }
     Some(json!({"_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": []}))
 }

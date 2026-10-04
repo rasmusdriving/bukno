@@ -665,6 +665,21 @@ impl TranscriptView {
             }
         }
 
+        // A user message's caption, under its last bubble.
+        if message.role == Role::User
+            && message.first_block + message.block_count == index + 1
+            && let (Some(meta), Some(frame)) = (&message.meta, laid.frame)
+        {
+            let bubble = frame.translate(origin.to_vec2());
+            painter.text(
+                pos2(bubble.right() - 4.0, bubble.bottom() + 6.0),
+                egui::Align2::RIGHT_TOP,
+                meta,
+                theme.font(&theme.text.t_small),
+                c.text_tertiary,
+            );
+        }
+
         // Copy message: shown while the message is hovered or holds the caret.
         let caret_here = self
             .selection

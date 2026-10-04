@@ -2,7 +2,9 @@
 
 Audit and plan, 3 October 2026. The direction is agreed ([decision 37](decisions.md)).
 Stage 1, the read-only client, is built and checked live; see
-[t3-read-only.md](../e2e/scenarios/t3-read-only.md). The existing direct Codex
+[t3-read-only.md](../e2e/scenarios/t3-read-only.md). Stage 2, the full local
+text flow, is built and checked live; see [t3-operate.md](../e2e/scenarios/t3-operate.md).
+The Stage 2 decision gate below is now open for review. The existing direct Codex
 app remains available while the full text flow is proven. This document
 proposes replacing the backend portions of the approved first-version
 specification; its UI requirements still apply. Stage 1 skipped the

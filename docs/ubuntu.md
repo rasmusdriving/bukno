@@ -2,8 +2,9 @@
 
 The native app now has Linux window-system support, XDG application-data paths,
 and Linux process identity/group cleanup. It still uses the existing direct
-Codex adapter. The read-only T3 client from the [T3 backend plan](t3-backend-audit.md)
-runs alongside it; T3 chats appear under T3 in the sidebar once a server is paired.
+Codex adapter. The T3 client from the [T3 backend plan](t3-backend-audit.md)
+runs alongside it; T3 chats appear under T3 in the sidebar once a server is
+paired, and can be worked in from Bukno.
 On Linux the sign-in is kept in the Secret Service (GNOME Keyring).
 
 ## Build and install

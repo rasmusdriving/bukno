@@ -18,6 +18,14 @@ pub struct SavedEnvironment {
     pub paired_at: u64,
 }
 
+impl SavedEnvironment {
+    /// Whether the sign-in may send, answer and stop. Sign-ins from Stage 1
+    /// only hold `orchestration:read` and must be paired again.
+    pub fn can_operate(&self) -> bool {
+        self.scope.split_whitespace().any(|s| s == crate::http::OPERATE_SCOPE)
+    }
+}
+
 pub struct EnvironmentStore {
     path: PathBuf,
 }

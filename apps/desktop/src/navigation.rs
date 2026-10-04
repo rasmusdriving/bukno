@@ -281,9 +281,13 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
     let mut add_project = false;
     let t3_environments = app.t3.as_ref().map(|t| t.view.environments.clone());
     let selected_remote = (app.view == View::Remote).then(|| app.remote.clone()).flatten();
+    let new_remote_here = (app.view == View::RemoteNew)
+        .then(|| app.remote_new.as_ref().map(|n| (n.environment.clone(), n.project.clone())))
+        .flatten();
     let t3_open = app.t3_open_projects.clone();
     let mut select_remote = None;
     let mut toggle_t3 = None;
+    let mut new_remote = None;
     let mut open_environments = false;
     egui::ScrollArea::vertical().id_salt("nav-list").auto_shrink([false, false]).show(&mut list_ui, |ui| {
         ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
@@ -383,7 +387,7 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
             }
         }
 
-        // Chats on T3 servers, read only, grouped by server and project.
+        // Chats on T3 servers, grouped by server and project.
         if let Some(environments) = &t3_environments {
             next(ui, theme.space.space_6 - 10.0);
             let label = next(ui, 27.0);
@@ -439,7 +443,18 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
                     )
                     .clicked()
                     {
-                        toggle_t3 = Some((key, !open));
+                        toggle_t3 = Some((key.clone(), !open));
+                    }
+                    let hovered = header.contains(ui.ctx().pointer_hover_pos().unwrap_or_default());
+                    if env.can_operate() && (hovered || !open || new_remote_here.as_ref() == Some(&key)) {
+                        let plus =
+                            Rect::from_center_size(pos2(header.right() - 14.0, header.center().y), vec2(24.0, 24.0));
+                        let label = format!("New chat in {} on {}", project.title, env.saved.label);
+                        if icon_button(ui, &theme, Id::new(("nav-t3-new", id, &project.id)), plus, Icon::Plus, &label)
+                            .clicked()
+                        {
+                            new_remote = Some(key);
+                        }
                     }
                     if !open {
                         continue;
@@ -463,7 +478,7 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
                             Trailing::Mark(provider)
                         };
                         let words = if thread.pending_runtime_request.is_some() {
-                            ", needs you in T3"
+                            ", needs you"
                         } else if active {
                             ", working"
                         } else {
@@ -482,7 +497,7 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
                                 selected,
                                 child: true,
                                 label: Some(format!(
-                                    "{}, {} chat on {}, read only{words}{}",
+                                    "{}, {} chat on {}{words}{}",
                                     thread.title,
                                     crate::components::provider_name(provider),
                                     env.saved.label,
@@ -510,6 +525,10 @@ fn sidebar_real(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
     }
     if let Some((key, open)) = toggle_t3 {
         app.t3_open_projects.insert(key, open);
+    }
+    if let Some((environment, project)) = new_remote {
+        app.new_remote_chat(environment, project);
+        ui.ctx().memory_mut(|m| m.request_focus(composer_id()));
     }
     if open_environments {
         app.show_environments = true;

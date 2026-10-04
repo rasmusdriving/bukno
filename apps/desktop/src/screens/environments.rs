@@ -44,7 +44,7 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
         y += text_at(
             ui,
             &theme,
-            "Bukno shows the projects and chats from a T3 server. This version only reads: it never sends messages, approvals or Stop, and it signs in with read-only access.",
+            "Bukno shows the projects and chats from a T3 server and works in them through T3: new chats, messages, approvals, questions, Stop, queue and steer. T3 runs the agents and keeps the chats; Bukno keeps only your drafts. It signs in to read and operate chats, nothing else.",
             &theme.text.t_body,
             c.text_secondary,
             pos2(left, y),
@@ -82,6 +82,16 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
             | ConnectionStatus::Reconnecting { reason, .. } = &env.status
             {
                 y += text_at(ui, &theme, reason, &theme.text.t_small, c.negative, pos2(left, y)) + 6.0;
+            }
+            if !env.can_operate() {
+                y += text_at(
+                    ui,
+                    &theme,
+                    "Paired when Bukno could only read. Paste a new pairing link below to send, answer and stop from Bukno.",
+                    &theme.text.t_small,
+                    c.attention,
+                    pos2(left, y),
+                ) + 6.0;
             }
             for provider in env.providers.iter().filter(|p| p.enabled) {
                 // Several variants can share one name; T3 tells them apart, so name the slug too.

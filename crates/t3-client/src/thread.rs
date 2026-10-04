@@ -11,7 +11,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::model::{HistoryPage, ProjectedItem, RunAttempt, ThreadEvent, ThreadItem, TurnItem, TurnKind};
+use crate::model::{
+    HistoryPage, ProjectedItem, Question, Run, RunAttempt, RuntimeRequest, ThreadEvent, ThreadItem, TurnItem, TurnKind,
+};
 
 /// Revisions come from one counter for the whole process, so a chat that is
 /// reloaded or reopened never repeats a revision a view has already seen.
@@ -33,6 +35,39 @@ pub struct Row {
     pub revision: u64,
 }
 
+/// An approval or question waiting for an answer, with what to show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingRequest {
+    pub request_id: String,
+    pub kind: PendingKind,
+    /// `live`, `message` or `not_resumable`.
+    pub capability: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PendingKind {
+    /// `request_kind` is `command`, `file-change`, `file-read`, `permission`
+    /// or `mcp-elicitation`. `prompt` is the command or detail, when given.
+    Approval {
+        request_kind: String,
+        prompt: Option<String>,
+    },
+    Question {
+        questions: Vec<Question>,
+        message_mode: bool,
+    },
+}
+
+/// A message waiting for the running turn to finish.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedMessage {
+    pub run_id: String,
+    pub text: String,
+    pub position: u64,
+    pub held: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ThreadState {
     pub thread_id: String,
@@ -41,8 +76,14 @@ pub struct ThreadState {
     pub incarnation: u64,
     pub title: String,
     pub rows: Vec<Arc<Row>>,
-    runs: HashMap<String, String>,
+    runs: HashMap<String, Run>,
     attempts: HashMap<String, RunAttempt>,
+    requests: HashMap<String, RuntimeRequest>,
+    /// User message texts by message ID, including queued messages that
+    /// have no timeline row yet.
+    user_messages: HashMap<String, String>,
+    /// Approval and question items by request ID, for their text.
+    request_items: HashMap<String, TurnItem>,
     /// Runs with an interrupt request, including requests outside the loaded
     /// rows, as T3 checks them against its full `turnItems`.
     interrupt_request_runs: HashSet<String>,
@@ -104,7 +145,14 @@ impl ThreadState {
             ThreadItem::Snapshot(snapshot) => {
                 self.counts.snapshots += 1;
                 self.title = snapshot.title;
-                self.runs = snapshot.runs.into_iter().map(|r| (r.id, r.status)).collect();
+                self.runs = snapshot.runs.into_iter().map(|r| (r.id.clone(), r)).collect();
+                self.requests = snapshot.requests.into_iter().map(|r| (r.id.clone(), r)).collect();
+                self.user_messages = snapshot.user_messages.into_iter().collect();
+                self.request_items = snapshot
+                    .request_items
+                    .into_iter()
+                    .filter_map(|i| request_id(&i).map(|id| (id.to_owned(), i.clone())))
+                    .collect();
                 self.attempts = snapshot.attempts.into_iter().map(|a| (a.id.clone(), a)).collect();
                 self.interrupt_request_runs = snapshot.interrupt_request_runs.into_iter().collect();
                 self.rows = snapshot.items.into_iter().map(|i| self.row(i)).collect();
@@ -131,13 +179,32 @@ impl ThreadState {
                     return false;
                 }
                 match *event {
-                    ThreadEvent::TurnItem(item) => self.upsert(item),
+                    ThreadEvent::TurnItem(item) => {
+                        if let Some(id) = request_id(&item) {
+                            self.request_items.insert(id.to_owned(), item.clone());
+                        }
+                        self.upsert(item)
+                    }
                     ThreadEvent::Run(run) => {
-                        // Rows can hide, and the working state can change.
-                        let working = self.working();
-                        let affects_rows = matches!(run.status.as_str(), "rolled_back" | "cancelled");
-                        self.runs.insert(run.id, run.status);
-                        (affects_rows || working != self.working()) && self.changed()
+                        // Rows can hide, the working state and the queue can change.
+                        let changed = self.runs.get(&run.id) != Some(&run);
+                        self.runs.insert(run.id.clone(), run);
+                        changed && self.changed()
+                    }
+                    ThreadEvent::UserMessage { id, text } => {
+                        // Shown only through the queue, which reads it on publish.
+                        let queued = self
+                            .runs
+                            .values()
+                            .any(|r| r.status == "queued" && r.user_message_id.as_deref() == Some(&id));
+                        let changed = self.user_messages.get(&id) != Some(&text);
+                        self.user_messages.insert(id, text);
+                        changed && queued && self.changed()
+                    }
+                    ThreadEvent::Request(request) => {
+                        let changed = self.requests.get(&request.id) != Some(&request);
+                        self.requests.insert(request.id.clone(), request);
+                        changed && self.changed()
                     }
                     ThreadEvent::Attempt(attempt) => {
                         let was = self.attempts.get(&attempt.id).map(|a| a.status == "superseded");
@@ -255,7 +322,7 @@ impl ThreadState {
             .iter()
             .filter(|row| {
                 let item = &row.item;
-                let run = item.run_id.as_ref().and_then(|id| self.runs.get(id)).map(String::as_str);
+                let run = item.run_id.as_ref().and_then(|id| self.runs.get(id)).map(|r| r.status.as_str());
                 if run == Some("rolled_back") {
                     return false;
                 }
@@ -275,8 +342,107 @@ impl ThreadState {
             .collect()
     }
 
-    /// Whether a run is active, from the statuses seen so far.
+    /// Whether a run is active, from the statuses seen so far. A held queue
+    /// alone is not work.
     pub fn working(&self) -> bool {
-        self.runs.values().any(|s| matches!(s.as_str(), "preparing" | "queued" | "starting" | "running" | "waiting"))
+        self.runs.values().any(|r| r.is_active() || (r.status == "queued" && r.queue_held != Some(true)))
+    }
+
+    /// The running turn, newest first if T3 ever reports more than one.
+    pub fn active_run(&self) -> Option<&Run> {
+        self.runs.values().filter(|r| r.is_active()).max_by_key(|r| r.ordinal)
+    }
+
+    pub fn runs(&self) -> impl Iterator<Item = &Run> {
+        self.runs.values()
+    }
+
+    pub fn run_status(&self, run_id: &str) -> Option<&str> {
+        self.runs.get(run_id).map(|r| r.status.as_str())
+    }
+
+    /// Messages waiting for the running turn, in queue order.
+    pub fn queued(&self) -> Vec<QueuedMessage> {
+        let mut queued: Vec<QueuedMessage> = self
+            .runs
+            .values()
+            .filter(|r| r.status == "queued")
+            .map(|r| QueuedMessage {
+                run_id: r.id.clone(),
+                text: r.user_message_id.as_deref().and_then(|m| self.message_text(m)).unwrap_or_default(),
+                position: r.queue_position.unwrap_or(r.ordinal),
+                held: r.queue_held == Some(true),
+            })
+            .collect();
+        queued.sort_by_key(|q| q.position);
+        queued
+    }
+
+    fn message_text(&self, message_id: &str) -> Option<String> {
+        self.user_messages.get(message_id).cloned().or_else(|| {
+            self.rows.iter().find_map(|r| match &r.item.kind {
+                TurnKind::UserMessage { message_id: id, text, .. } if id == message_id => Some(text.clone()),
+                _ => None,
+            })
+        })
+    }
+
+    /// Whether a user message with this ID is in the chat.
+    pub fn has_message(&self, message_id: &str) -> bool {
+        self.runs.values().any(|r| r.user_message_id.as_deref() == Some(message_id))
+            || self.user_messages.contains_key(message_id)
+            || self
+                .rows
+                .iter()
+                .any(|r| matches!(&r.item.kind, TurnKind::UserMessage { message_id: id, .. } if id == message_id))
+    }
+
+    /// Approvals and questions still waiting, oldest first, as T3's own
+    /// client derives them (`client-runtime/src/state/threadRequests.ts`).
+    pub fn pending_requests(&self) -> Vec<PendingRequest> {
+        let mut pending: Vec<PendingRequest> = self
+            .requests
+            .values()
+            .filter(|r| r.status == "pending" && !matches!(r.kind.as_str(), "auth_refresh" | "dynamic_tool_call"))
+            .filter_map(|r| {
+                let item = self.request_items.get(&r.id);
+                let kind = if r.kind == "user_input" {
+                    // A question without its item has nothing to show yet.
+                    match &item?.kind {
+                        TurnKind::UserInputRequest { questions, message_mode, .. } => {
+                            PendingKind::Question { questions: questions.clone(), message_mode: *message_mode }
+                        }
+                        _ => return None,
+                    }
+                } else {
+                    let prompt = item.and_then(|i| match &i.kind {
+                        TurnKind::ApprovalRequest { prompt, .. } => prompt.clone(),
+                        _ => None,
+                    });
+                    PendingKind::Approval { request_kind: r.kind.clone(), prompt }
+                };
+                Some(PendingRequest {
+                    request_id: r.id.clone(),
+                    kind,
+                    capability: r.capability().to_owned(),
+                    created_at: r.created_at.clone(),
+                })
+            })
+            .collect();
+        pending.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.request_id.cmp(&b.request_id)));
+        pending
+    }
+
+    pub fn request_status(&self, request_id: &str) -> Option<&str> {
+        self.requests.get(request_id).map(|r| r.status.as_str())
+    }
+}
+
+fn request_id(item: &TurnItem) -> Option<&str> {
+    match &item.kind {
+        TurnKind::ApprovalRequest { request_id, .. } | TurnKind::UserInputRequest { request_id, .. } => {
+            Some(request_id)
+        }
+        _ => None,
     }
 }

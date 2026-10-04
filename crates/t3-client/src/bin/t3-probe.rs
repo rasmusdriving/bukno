@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use bukno_t3_client::http::Http;
 use bukno_t3_client::pairing::{normalize_address, parse_pairing};
-use bukno_t3_client::rpc::{ReadOnlyMethod, Session, StreamEvent};
+use bukno_t3_client::rpc::{Method, Session, StreamEvent};
 use bukno_t3_client::secret::{SystemKeychain, TokenVault};
 use bukno_t3_client::store::{EnvironmentStore, SavedEnvironment};
 use bukno_t3_client::{Log, T3Error, time};
@@ -101,17 +101,17 @@ async fn record(args: &[String]) -> Result<(), String> {
         let _ = writeln!(file, "{line}");
     };
 
-    let config = session.call(ReadOnlyMethod::GetConfig, json!({})).await.map_err(|e| e.user_message())?;
+    let config = session.call(Method::GetConfig, json!({})).await.map_err(|e| e.user_message())?;
     write("server.getConfig", &config);
     let mut shell = session
-        .subscribe(ReadOnlyMethod::SubscribeShell, json!({"requestCompletionMarker": true}))
+        .subscribe(Method::SubscribeShell, json!({"requestCompletionMarker": true}))
         .await
         .map_err(|e| e.user_message())?;
     let mut thread_sub = match &thread {
         Some(id) => Some(
             session
                 .subscribe(
-                    ReadOnlyMethod::SubscribeThread,
+                    Method::SubscribeThread,
                     json!({"threadId": id, "requestCompletionMarker": true, "acceptBoundedSnapshot": true}),
                 )
                 .await
