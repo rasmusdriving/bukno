@@ -4,9 +4,11 @@ A lightweight, open-source native interface for Codex and Claude Code. Pronounce
 
 Bukno is moving to T3's server as its backend while keeping the Rust interface
 ([decision 37](docs/decisions.md), [T3 backend plan](docs/t3-backend-audit.md)).
-Stage 1 is built: Bukno pairs with a T3 server and shows its projects, chats
-and models, live and read only. It cannot send, approve or stop anything yet.
-See [the read-only check](e2e/scenarios/t3-read-only.md). The direct Codex path
+Stages 1 and 2 are built: Bukno pairs with a T3 server, shows its projects,
+chats and models live, and works in them through T3. It starts Codex and
+Claude chats, sends, answers approvals and questions, stops, queues and steers,
+and picks up again after a restart. See [the read-only check](e2e/scenarios/t3-read-only.md)
+and [the Stage 2 check](e2e/scenarios/t3-operate.md). The direct Codex path
 still works unchanged. [Ubuntu setup](docs/ubuntu.md) covers the native app on Ubuntu.
 
 ## Agreed architecture
@@ -69,8 +71,12 @@ approvals, Stop, restart/resume, draft persistence and engine cleanup. See
 have not been tested end to end, and Windows has only been compile-checked.
 On 3 October the read-only T3 client passed its live end-to-end check against
 the Ubuntu T3 server (pairing, lists, a 362-row chat, paged history, live
-updates, network loss, restart, unknown message types, revocation). Sending
-through T3 is Stage 2. The plugin manager is proposed. Memory figures in the plan
+updates, network loss, restart, unknown message types, revocation). On 4 October
+the Stage 2 check passed against the same server's newer build: Codex and
+Claude chats started from Bukno, approvals allowed and denied, a question
+answered, queue, steer, Stop and Resume, a Bukno restart during a run, lost
+replies and an offline send, each message in T3 exactly once. Delegated child
+chats are Stage 3 and are not opened separately yet. The plugin manager is proposed. Memory figures in the plan
 remain targets or observations from the existing desktop app, not new Bukno
 versus T3 benchmark results.
 

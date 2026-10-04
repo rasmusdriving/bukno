@@ -15,15 +15,16 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use url::Url;
 
+use crate::command::{CommandRequest, Outgoing};
 use crate::error::T3Error;
 use crate::http::Http;
 use crate::model::{ProjectShell, Provider, ServerConfig, ShellItem, ThreadItem, ThreadShell};
 use crate::pairing::{parse_pairing, socket_url};
-use crate::rpc::{ReadOnlyMethod, Session, StreamEvent, Subscription};
+use crate::rpc::{Method, Session, StreamEvent, Subscription};
 use crate::secret::TokenVault;
 use crate::shell::{ShellState, StreamCounts};
 use crate::store::{EnvironmentStore, SavedEnvironment};
-use crate::thread::{Row, ThreadState};
+use crate::thread::{PendingRequest, QueuedMessage, Row, ThreadState};
 use crate::{Log, time};
 
 const BACKOFF_START: Duration = Duration::from_millis(500);
@@ -85,7 +86,48 @@ pub struct ThreadView {
     pub error: Option<String>,
     /// The last event sequence applied: where a resume continues from.
     pub last_sequence: Option<u64>,
+    /// The running turn, which Stop and Steer target.
+    pub active_run: Option<String>,
+    /// Approvals and questions waiting, oldest first.
+    pub pending: Vec<PendingRequest>,
+    /// Messages waiting for the running turn, in order.
+    pub queued: Vec<QueuedMessage>,
+    /// Status of each run by ID, for labels.
+    pub run_status: BTreeMap<String, String>,
 }
+
+/// Where a command stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OutboxState {
+    /// Written to the socket; no reply yet.
+    Sending,
+    /// T3 accepted it, or its effect was seen in the chat after a lost reply.
+    /// A launch carries the new chat's ID.
+    Accepted { observed: bool, thread_id: Option<String> },
+    /// Refused, by T3 or before sending. The text says why; nothing ran.
+    Rejected(String),
+    /// The connection dropped before T3 answered, and the chat does not show
+    /// it yet. Sending it again is safe: T3 runs one command ID at most once.
+    Unconfirmed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutboxEntry {
+    pub request: CommandRequest,
+    pub state: OutboxState,
+    /// Why an unconfirmed command is in doubt, when T3 said something.
+    pub note: Option<String>,
+}
+
+impl OutboxEntry {
+    /// Still waiting for an answer, or in doubt.
+    pub fn unsettled(&self) -> bool {
+        matches!(self.state, OutboxState::Sending | OutboxState::Unconfirmed)
+    }
+}
+
+/// Commands kept for the view; older settled ones are dropped.
+const OUTBOX_KEEP: usize = 64;
 
 #[derive(Clone, Debug)]
 pub struct EnvironmentView {
@@ -98,6 +140,8 @@ pub struct EnvironmentView {
     pub shell_counts: StreamCounts,
     pub providers: Vec<Provider>,
     pub thread: Option<ThreadView>,
+    /// Commands sent from this computer, oldest first.
+    pub outbox: Vec<OutboxEntry>,
     /// Successful socket connections since Bukno started.
     pub connections: u64,
     pub requests_sent: u64,
@@ -114,6 +158,11 @@ pub struct HubView {
 }
 
 enum EnvCommand {
+    Dispatch(CommandRequest),
+    /// A command from before a restart whose outcome is unknown.
+    Adopt(CommandRequest),
+    Retry(String),
+    DismissCommand(String),
     OpenThread(String),
     CloseThread,
     LoadOlder,
@@ -201,7 +250,7 @@ impl Hub {
         });
         let hub = Self { runtime, shared };
         for environment in saved {
-            spawn_environment(&hub.shared, hub.runtime.handle(), environment, None);
+            spawn_environment(&hub.shared, hub.runtime.handle(), environment, None, Vec::new());
         }
         hub
     }
@@ -235,6 +284,28 @@ impl Hub {
 
     pub fn load_older(&self, environment_id: &str) {
         self.send(environment_id, EnvCommand::LoadOlder);
+    }
+
+    /// Send a command. Its progress shows in [`EnvironmentView::outbox`].
+    pub fn dispatch(&self, environment_id: &str, request: CommandRequest) {
+        self.send(environment_id, EnvCommand::Dispatch(request));
+    }
+
+    /// Take back a command saved before Bukno quit, as unconfirmed. It is
+    /// settled from the chat once caught up, or offered as Send again; it is
+    /// never sent by itself.
+    pub fn adopt(&self, environment_id: &str, request: CommandRequest) {
+        self.send(environment_id, EnvCommand::Adopt(request));
+    }
+
+    /// Send an unconfirmed command again, with the same command ID.
+    pub fn retry(&self, environment_id: &str, command_id: &str) {
+        self.send(environment_id, EnvCommand::Retry(command_id.to_owned()));
+    }
+
+    /// Stop showing a command's notice.
+    pub fn dismiss_command(&self, environment_id: &str, command_id: &str) {
+        self.send(environment_id, EnvCommand::DismissCommand(command_id.to_owned()));
     }
 
     /// Try again now, after a block or during a backoff wait.
@@ -315,16 +386,27 @@ impl Hub {
             }
             // Re-pairing replaces the running task, which then uses the new
             // sign-in. The chat open on screen stays open on the new task.
-            let open = shared
-                .views
-                .lock()
-                .unwrap()
-                .get(&saved.environment_id)
-                .and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
+            let (open, carried) = {
+                let views = shared.views.lock().unwrap();
+                let view = views.get(&saved.environment_id);
+                let open = view.and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
+                // Commands still in doubt keep their IDs on the new task, so
+                // they are settled or sent again with the same ones.
+                let carried: Vec<OutboxEntry> = view
+                    .map(|v| {
+                        v.outbox
+                            .iter()
+                            .filter(|e| e.unsettled())
+                            .map(|e| OutboxEntry { state: OutboxState::Unconfirmed, ..e.clone() })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (open, carried)
+            };
             if let Some((_, previous)) = shared.tasks.lock().unwrap().remove(&saved.environment_id) {
                 let _ = previous.send(EnvCommand::Forget);
             }
-            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone(), open);
+            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone(), open, carried);
             shared.set_pairing(PairingStatus::Paired { environment_id: saved.environment_id, label: saved.label });
         });
     }
@@ -339,12 +421,13 @@ fn spawn_environment(
     handle: &tokio::runtime::Handle,
     saved: SavedEnvironment,
     open_thread: Option<String>,
+    outbox: Vec<OutboxEntry>,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
     let generation = shared.next_generation.fetch_add(1, Ordering::SeqCst);
     shared.tasks.lock().unwrap().insert(saved.environment_id.clone(), (generation, tx));
     shared.publish(generation, EnvironmentView::new(saved.clone()));
-    handle.spawn(run_environment(shared.clone(), generation, saved, open_thread, rx));
+    handle.spawn(run_environment(shared.clone(), generation, saved, open_thread, outbox, rx));
 }
 
 impl EnvironmentView {
@@ -358,10 +441,25 @@ impl EnvironmentView {
             shell_counts: StreamCounts::default(),
             providers: Vec::new(),
             thread: None,
+            outbox: Vec::new(),
             connections: 0,
             requests_sent: 0,
             unknown_frames: 0,
         }
+    }
+
+    /// Whether this sign-in may send, answer and stop.
+    pub fn can_operate(&self) -> bool {
+        self.saved.can_operate()
+    }
+
+    /// Connected, caught up, and allowed to send.
+    pub fn ready_to_send(&self) -> bool {
+        self.can_operate() && self.status == ConnectionStatus::Connected { current: true }
+    }
+
+    pub fn command(&self, command_id: &str) -> Option<&OutboxEntry> {
+        self.outbox.iter().find(|e| e.request.command_id == command_id)
     }
 }
 
@@ -385,12 +483,96 @@ struct EnvState {
     /// new snapshot never leaves paging stuck.
     history_pending: Option<(u64, String)>,
     history_error: Option<String>,
+    outbox: Vec<OutboxEntry>,
     connections: u64,
     requests_sent: u64,
     unknown_frames: u64,
 }
 
 impl EnvState {
+    fn entry(&mut self, command_id: &str) -> Option<&mut OutboxEntry> {
+        self.outbox.iter_mut().find(|e| e.request.command_id == command_id)
+    }
+
+    fn record(&mut self, request: CommandRequest, state: OutboxState) {
+        self.outbox.retain(|e| e.request.command_id != request.command_id);
+        self.outbox.push(OutboxEntry { request, state, note: None });
+        // Drop the oldest settled entries; never one still in doubt.
+        while self.outbox.len() > OUTBOX_KEEP {
+            let Some(at) =
+                self.outbox.iter().position(|e| !matches!(e.state, OutboxState::Sending | OutboxState::Unconfirmed))
+            else {
+                break;
+            };
+            self.outbox.remove(at);
+        }
+    }
+
+    /// The connection is gone: any command without a reply is in doubt.
+    fn connection_lost(&mut self) {
+        for entry in &mut self.outbox {
+            if entry.state == OutboxState::Sending {
+                entry.state = OutboxState::Unconfirmed;
+            }
+        }
+    }
+
+    /// Settle commands whose effect the caught-up chat or chat list already
+    /// shows, whether or not T3's reply has arrived, so a slow or lost reply
+    /// never holds up what the user can already see. Only
+    /// exact evidence counts: the message or chat ID Bukno chose, or the
+    /// request, run or queue it acted on having moved on. A reply arriving
+    /// later is ignored. Returns true when anything changed.
+    fn reconcile(&mut self) -> bool {
+        let thread = self.thread.as_ref().filter(|t| t.synchronized);
+        let shell_current = self.shell.synchronized;
+        let mut changed = false;
+        for entry in &mut self.outbox {
+            if !matches!(entry.state, OutboxState::Sending | OutboxState::Unconfirmed) {
+                continue;
+            }
+            let request = &entry.request;
+            let here = thread.filter(|t| t.thread_id == request.thread_id());
+            let done = match &request.outgoing {
+                // T3 creates the chat and sends its first message in two
+                // steps, so the chat alone does not prove the message landed.
+                // Any user message in a chat Bukno just created is that one.
+                Outgoing::Launch { thread_id, .. } => {
+                    shell_current
+                        && self.shell.threads.get(thread_id).is_some_and(|t| t.latest_user_message_at.is_some())
+                }
+                Outgoing::Send { message_id, .. } => here.is_some_and(|t| t.has_message(message_id)),
+                Outgoing::Approve { request_id, .. }
+                | Outgoing::Answer { request_id, .. }
+                | Outgoing::Dismiss { request_id, .. } => {
+                    here.is_some_and(|t| t.request_status(request_id).is_some_and(|s| s != "pending"))
+                }
+                Outgoing::Interrupt { run_id, .. } => here.is_some_and(|t| {
+                    t.run_status(run_id).is_some_and(|s| !matches!(s, "preparing" | "starting" | "running" | "waiting"))
+                }),
+                Outgoing::PromoteQueued { queued_run_id: run_id, .. } | Outgoing::CancelQueued { run_id, .. } => {
+                    here.is_some_and(|t| t.run_status(run_id).is_some_and(|s| s != "queued"))
+                }
+                Outgoing::ResumeQueue { .. } => here.is_some_and(|t| t.queued().iter().all(|q| !q.held)),
+                Outgoing::SetRuntimeMode { thread_id, runtime_mode } => {
+                    shell_current
+                        && self
+                            .shell
+                            .threads
+                            .get(thread_id)
+                            .is_some_and(|t| t.runtime_mode.as_deref() == Some(runtime_mode))
+                }
+            };
+            if done {
+                let thread_id =
+                    matches!(request.outgoing, Outgoing::Launch { .. }).then(|| request.thread_id().to_owned());
+                entry.state = OutboxState::Accepted { observed: true, thread_id };
+                changed = true;
+            }
+        }
+        changed
+    }
+
     fn history_in_flight(&self) -> bool {
         match (&self.history_pending, &self.thread) {
             (Some((incarnation, cursor)), Some(thread)) => {
@@ -433,7 +615,12 @@ impl EnvState {
                 unknown_event_types: t.unknown_event_types.iter().cloned().collect(),
                 error: self.thread_error.clone(),
                 last_sequence: t.last_sequence,
+                active_run: t.active_run().map(|r| r.id.clone()),
+                pending: t.pending_requests(),
+                queued: t.queued(),
+                run_status: t.runs().map(|r| (r.id.clone(), r.status.clone())).collect(),
             }),
+            outbox: self.outbox.clone(),
             connections: self.connections,
             requests_sent: self.requests_sent,
             unknown_frames: self.unknown_frames,
@@ -466,6 +653,22 @@ async fn wait(
             command = commands.recv() => match command {
                 None | Some(EnvCommand::Forget) => return Wake::Forget,
                 Some(EnvCommand::Reconnect) => return Wake::Retry,
+                Some(EnvCommand::Dispatch(request)) => {
+                    state.record(request, OutboxState::Rejected("Not connected to T3, so nothing was sent.".into()));
+                    shared.publish(state.generation, state.view());
+                }
+                Some(EnvCommand::Adopt(request)) => {
+                    if state.entry(&request.command_id).is_none() {
+                        state.record(request, OutboxState::Unconfirmed);
+                        shared.publish(state.generation, state.view());
+                    }
+                }
+                // An unconfirmed command waits for the connection; Retry needs one.
+                Some(EnvCommand::Retry(_)) => {}
+                Some(EnvCommand::DismissCommand(id)) => {
+                    state.outbox.retain(|e| e.request.command_id != id || e.state == OutboxState::Sending);
+                    shared.publish(state.generation, state.view());
+                }
                 Some(EnvCommand::OpenThread(id)) => {
                     state.thread = Some(ThreadState::new(&id));
                     state.thread_error = None;
@@ -560,6 +763,7 @@ async fn run_environment(
     generation: u64,
     saved: SavedEnvironment,
     open_thread: Option<String>,
+    outbox: Vec<OutboxEntry>,
     mut commands: mpsc::UnboundedReceiver<EnvCommand>,
 ) {
     let log = shared.log.clone();
@@ -575,11 +779,13 @@ async fn run_environment(
         thread_error: None,
         history_pending: None,
         history_error: None,
+        outbox,
         connections: 0,
         requests_sent: 0,
         unknown_frames: 0,
     };
     let (history_tx, mut history_rx) = mpsc::unbounded_channel::<HistoryReply>();
+    let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<CommandReply>();
     let mut attempt: u32 = 0;
 
     loop {
@@ -626,10 +832,21 @@ async fn run_environment(
         state.server_version = Some(descriptor.server_version.clone());
         log(&format!("env {name}: socket open to {} ({})", descriptor.label, descriptor.server_version));
 
-        let outcome = serve(&shared, &mut state, &session, &mut commands, &history_tx, &mut history_rx).await;
+        let channels = Channels {
+            history_tx: &history_tx,
+            history_rx: &mut history_rx,
+            reply_tx: &reply_tx,
+            reply_rx: &mut reply_rx,
+        };
+        let outcome = serve(&shared, &mut state, &session, &mut commands, channels).await;
         state.requests_sent += session.stats.requests_out.load(Ordering::Relaxed);
         state.unknown_frames += session.stats.unknown_frames.load(Ordering::Relaxed);
         drop(session);
+        // Replies that never came are in doubt from here on.
+        while let Ok(reply) = reply_rx.try_recv() {
+            apply_reply(&mut state, reply);
+        }
+        state.connection_lost();
         match outcome {
             Served::Forget => {
                 log(&format!("env {name}: removed"));
@@ -685,6 +902,99 @@ struct HistoryReply {
     result: Result<crate::model::HistoryPage, T3Error>,
 }
 
+/// T3's answer to one command.
+struct CommandReply {
+    command_id: String,
+    result: Result<Value, T3Error>,
+}
+
+fn apply_reply(state: &mut EnvState, reply: CommandReply) {
+    let Some(entry) = state.entry(&reply.command_id) else { return };
+    // A reply only settles a command still waiting for one.
+    if !matches!(entry.state, OutboxState::Sending | OutboxState::Unconfirmed) {
+        return;
+    }
+    // A message can be stored by T3 before a later step fails (a launch
+    // creates the chat, stores the message, then prepares the run), and a
+    // server defect says nothing about what ran. Those stay in doubt: they
+    // are settled from the chat, or sent again with the same IDs, which T3
+    // answers with the first outcome. Only an authorization refusal, or a
+    // refusal of a command that carries no message, is final.
+    let carries_message = entry.request.message_id().is_some();
+    let (state, note) = match reply.result {
+        Ok(value) => (
+            OutboxState::Accepted {
+                observed: false,
+                thread_id: value.get("threadId").and_then(Value::as_str).map(str::to_owned),
+            },
+            None,
+        ),
+        // The socket went before the reply: it may or may not have run.
+        Err(T3Error::Disconnected { .. }) => (OutboxState::Unconfirmed, None),
+        Err(T3Error::SignInRejected) => (
+            OutboxState::Rejected(
+                "T3 refused this computer's sign-in for sending. Pair the server again to send from Bukno.".into(),
+            ),
+            None,
+        ),
+        Err(T3Error::Rpc { detail }) if carries_message || detail.contains("server defect") => {
+            (OutboxState::Unconfirmed, Some(format!("T3 reported a problem: {}", short_reason(&detail))))
+        }
+        Err(T3Error::Rpc { detail }) => {
+            (OutboxState::Rejected(format!("T3 refused it: {}", short_reason(&detail))), None)
+        }
+        Err(other) if carries_message => (OutboxState::Unconfirmed, Some(other.user_message())),
+        Err(other) => (OutboxState::Rejected(other.user_message()), None),
+    };
+    entry.state = state;
+    entry.note = note;
+}
+
+/// `orchestration.dispatchCommand: SomeError: the message` as `the message`.
+fn short_reason(detail: &str) -> String {
+    let without_method = detail.split_once(": ").map_or(detail, |(_, rest)| rest);
+    let reason = match without_method.split_once(": ") {
+        Some((tag, message)) if !tag.contains(' ') => message,
+        _ => without_method,
+    };
+    reason.trim().trim_end_matches('.').to_owned() + "."
+}
+
+struct Channels<'a> {
+    history_tx: &'a mpsc::UnboundedSender<HistoryReply>,
+    history_rx: &'a mut mpsc::UnboundedReceiver<HistoryReply>,
+    reply_tx: &'a mpsc::UnboundedSender<CommandReply>,
+    reply_rx: &'a mut mpsc::UnboundedReceiver<CommandReply>,
+}
+
+/// Write a command and wait for its reply in its own task.
+fn send_command(
+    shared: &Shared,
+    state: &mut EnvState,
+    session: &Session,
+    reply_tx: &mpsc::UnboundedSender<CommandReply>,
+    request: CommandRequest,
+) {
+    if !state.saved.can_operate() {
+        state.record(
+            request,
+            OutboxState::Rejected("This server was paired to read only. Pair it again to send from Bukno.".into()),
+        );
+        return;
+    }
+    let caller = session.caller();
+    let method = request.method();
+    let payload = request.payload();
+    let command_id = request.command_id.clone();
+    (shared.log)(&format!("env {}: command {} ({})", state.saved.label, command_id, request.describe()));
+    state.record(request, OutboxState::Sending);
+    let tx = reply_tx.clone();
+    tokio::spawn(async move {
+        let result = caller.call(method, payload).await;
+        let _ = tx.send(CommandReply { command_id, result });
+    });
+}
+
 /// Chat list decode failures in a row on one socket before reconnecting it.
 const SHELL_RETRY_LIMIT: u32 = 3;
 
@@ -703,9 +1013,9 @@ async fn serve(
     state: &mut EnvState,
     session: &Session,
     commands: &mut mpsc::UnboundedReceiver<EnvCommand>,
-    history_tx: &mpsc::UnboundedSender<HistoryReply>,
-    history_rx: &mut mpsc::UnboundedReceiver<HistoryReply>,
+    channels: Channels<'_>,
 ) -> Served {
+    let Channels { history_tx, history_rx, reply_tx, reply_rx } = channels;
     let log = shared.log.clone();
     let name = state.saved.label.clone();
     let lost = |error: T3Error, state: &EnvState| Served::Lost { error, healthy: state.shell.synchronized };
@@ -713,7 +1023,7 @@ async fn serve(
     // Until this connection catches up, a failure is not after a healthy run.
     state.shell.connection_started();
     // Which environment answered on the socket must match the saved one too.
-    let config = match session.call(ReadOnlyMethod::GetConfig, json!({})).await {
+    let config = match session.call(Method::GetConfig, json!({})).await {
         Ok(value) => match ServerConfig::decode(&value) {
             Ok(config) => config,
             Err(detail) => return lost(T3Error::Decode { detail: format!("server config: {detail}") }, state),
@@ -731,14 +1041,14 @@ async fn serve(
     }
     state.providers = config.providers;
 
-    let mut shell = match session.subscribe(ReadOnlyMethod::SubscribeShell, shell_request(&state.shell)).await {
+    let mut shell = match session.subscribe(Method::SubscribeShell, shell_request(&state.shell)).await {
         Ok(s) => s,
         Err(e) => return lost(e, state),
     };
     let mut thread_sub = None;
     if let Some(thread) = state.thread.as_mut() {
         thread.subscription_started();
-        match session.subscribe(ReadOnlyMethod::SubscribeThread, thread_request(thread)).await {
+        match session.subscribe(Method::SubscribeThread, thread_request(thread)).await {
             Ok(s) => thread_sub = Some(s),
             Err(e) => return lost(e, state),
         }
@@ -780,7 +1090,7 @@ async fn serve(
                         state.shell.last_sequence = None;
                         state.shell.connection_started();
                         drop(shell); // Interrupt the old stream first.
-                        shell = match session.subscribe(ReadOnlyMethod::SubscribeShell, shell_request(&state.shell)).await {
+                        shell = match session.subscribe(Method::SubscribeShell, shell_request(&state.shell)).await {
                             Ok(s) => s,
                             Err(e) => return lost(e, state),
                         };
@@ -791,6 +1101,7 @@ async fn serve(
                     if state.shell.synchronized {
                         shell_failures = 0;
                     }
+                    changed |= state.reconcile();
                     if changed {
                         shared.publish(state.generation, state.view());
                     }
@@ -834,7 +1145,7 @@ async fn serve(
                             if thread_failures > THREAD_RETRY_LIMIT {
                                 return lost(T3Error::Disconnected { detail: "the open chat kept failing".into() }, state);
                             }
-                            match session.subscribe(ReadOnlyMethod::SubscribeThread, thread_request(state.thread.as_ref().unwrap())).await {
+                            match session.subscribe(Method::SubscribeThread, thread_request(state.thread.as_ref().unwrap())).await {
                                 Ok(s) => thread_sub = Some(s),
                                 Err(e) => return lost(e, state),
                             }
@@ -848,6 +1159,7 @@ async fn serve(
                             thread_failures = 0;
                             state.thread_error = None;
                         }
+                        changed |= state.reconcile();
                         if changed {
                             shared.publish(state.generation, state.view());
                         }
@@ -871,7 +1183,7 @@ async fn serve(
                         // Resume from the last applied event on the same socket.
                         tokio::time::sleep(BACKOFF_START * thread_failures).await;
                         thread.subscription_started();
-                        match session.subscribe(ReadOnlyMethod::SubscribeThread, thread_request(thread)).await {
+                        match session.subscribe(Method::SubscribeThread, thread_request(thread)).await {
                             Ok(s) => thread_sub = Some(s),
                             Err(e) => return lost(e, state),
                         }
@@ -883,6 +1195,31 @@ async fn serve(
                 Some(EnvCommand::Reconnect) => {
                     return lost(T3Error::Disconnected { detail: "reconnect requested".into() }, state);
                 }
+                Some(EnvCommand::Dispatch(request)) => {
+                    // A second press of the same action is one command.
+                    if state.entry(&request.command_id).is_none() {
+                        send_command(shared, state, session, reply_tx, request);
+                        shared.publish(state.generation, state.view());
+                    }
+                }
+                Some(EnvCommand::Adopt(request)) => {
+                    if state.entry(&request.command_id).is_none() {
+                        state.record(request, OutboxState::Unconfirmed);
+                        state.reconcile();
+                        shared.publish(state.generation, state.view());
+                    }
+                }
+                Some(EnvCommand::Retry(id)) => {
+                    let request = state.entry(&id).filter(|e| e.state == OutboxState::Unconfirmed).map(|e| e.request.clone());
+                    if let Some(request) = request {
+                        send_command(shared, state, session, reply_tx, request);
+                        shared.publish(state.generation, state.view());
+                    }
+                }
+                Some(EnvCommand::DismissCommand(id)) => {
+                    state.outbox.retain(|e| e.request.command_id != id || e.state == OutboxState::Sending);
+                    shared.publish(state.generation, state.view());
+                }
                 Some(EnvCommand::OpenThread(id)) => {
                     if state.thread.as_ref().is_some_and(|t| t.thread_id == id) {
                         continue;
@@ -893,7 +1230,7 @@ async fn serve(
                     state.history_error = None;
                     state.history_pending = None;
                     let thread = ThreadState::new(&id);
-                    match session.subscribe(ReadOnlyMethod::SubscribeThread, thread_request(&thread)).await {
+                    match session.subscribe(Method::SubscribeThread, thread_request(&thread)).await {
                         Ok(s) => thread_sub = Some(s),
                         Err(e) => {
                             state.thread = Some(thread);
@@ -933,6 +1270,13 @@ async fn serve(
                     });
                 }
             },
+            reply = reply_rx.recv() => {
+                let Some(reply) = reply else { continue };
+                apply_reply(state, reply);
+                // A reply can arrive after the chat already shows the effect.
+                state.reconcile();
+                shared.publish(state.generation, state.view());
+            }
             page = history_rx.recv() => {
                 let Some(HistoryReply { incarnation, cursor, result }) = page else { continue };
                 let key = (incarnation, cursor);
@@ -961,7 +1305,7 @@ async fn serve(
                         let id = thread.thread_id.clone();
                         *thread = ThreadState::new(&id);
                         drop(thread_sub.take()); // Interrupt the old stream first.
-                        match session.subscribe(ReadOnlyMethod::SubscribeThread, thread_request(thread)).await {
+                        match session.subscribe(Method::SubscribeThread, thread_request(thread)).await {
                             Ok(s) => thread_sub = Some(s),
                             Err(e) => return lost(e, state),
                         }

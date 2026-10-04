@@ -18,10 +18,12 @@ const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const BOOTSTRAP_TOKEN_TYPE: &str = "urn:t3:params:oauth:token-type:environment-bootstrap";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 
-/// The only scope Bukno asks for in Stage 1. The server refuses every
-/// command method for a session without `orchestration:operate`, so even a
-/// bug on this side cannot change anything on the server.
-pub const READ_ONLY_SCOPE: &str = "orchestration:read";
+/// Read chats, and operate them: send, answer, stop. Nothing else (no
+/// terminals, reviews, relay or access management). The server refuses any
+/// method outside these at call time.
+pub const READ_SCOPE: &str = "orchestration:read";
+pub const OPERATE_SCOPE: &str = "orchestration:operate";
+pub const REQUESTED_SCOPES: &str = "orchestration:read orchestration:operate";
 
 #[derive(Clone)]
 pub struct Http {
@@ -106,7 +108,8 @@ impl Http {
         Ok(descriptor)
     }
 
-    /// Exchange a one-time pairing credential for a read-only bearer token.
+    /// Exchange a one-time pairing credential for a bearer token that can read
+    /// and operate chats.
     pub async fn exchange(&self, base: &Url, credential: &Secret, label: &str) -> Result<AccessToken, T3Error> {
         #[derive(Deserialize)]
         struct Response {
@@ -120,7 +123,7 @@ impl Http {
             ("subject_token", credential.expose()),
             ("subject_token_type", BOOTSTRAP_TOKEN_TYPE),
             ("requested_token_type", ACCESS_TOKEN_TYPE),
-            ("scope", READ_ONLY_SCOPE),
+            ("scope", REQUESTED_SCOPES),
             ("client_label", label),
             ("client_device_type", "desktop"),
             ("client_os", std::env::consts::OS),

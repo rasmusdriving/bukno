@@ -20,6 +20,7 @@ eframe = { workspace = true, features = ["wgpu", "accesskit", "default_fonts"] }
 egui.workspace = true
 png = "0.18"
 pulldown-cmark.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]

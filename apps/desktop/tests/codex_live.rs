@@ -273,6 +273,7 @@ fn answer_until_done(app: &mut App, run: &mut Run, deny: Option<&str>, tag: &str
                 }
                 DecisionKind::FileChange { files, .. } => (format!("file change: {files:?}"), false),
                 DecisionKind::Question { questions } => (format!("question: {}", questions.len()), true),
+                DecisionKind::Access { what, .. } => (format!("access: {what}"), true),
             };
             app.shot(run, &format!("{tag}-approval-{}", answered.len() + 1));
             let label = if refuse {

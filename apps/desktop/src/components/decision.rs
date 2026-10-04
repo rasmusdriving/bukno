@@ -27,6 +27,21 @@ pub enum CardAction {
     Answers(Vec<(String, Vec<String>)>),
 }
 
+/// Where a multi-select question keeps its chosen options, apart from its free text.
+fn selection_key(question: &Question) -> String {
+    format!("{}{SEPARATOR}chosen", question.id)
+}
+
+/// Separates chosen options; a control character no option label contains.
+const SEPARATOR: char = '\u{1f}';
+
+fn chosen_options(answers: &HashMap<String, String>, question: &Question) -> Vec<String> {
+    answers
+        .get(&selection_key(question))
+        .map(|s| s.split(SEPARATOR).filter(|o| !o.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
 pub fn card_id(decision: &DecisionView) -> Id {
     Id::new(("decision-card", decision.id))
 }
@@ -37,6 +52,7 @@ fn title(kind: &DecisionKind, provider: &str) -> String {
         DecisionKind::FileChange { files, .. } if files.len() == 1 => format!("{provider} wants to change a file"),
         DecisionKind::FileChange { .. } => format!("{provider} wants to change files"),
         DecisionKind::Question { .. } => format!("{provider} has a question"),
+        DecisionKind::Access { what, .. } => format!("{provider} asks to {what}"),
     }
 }
 
@@ -44,6 +60,7 @@ fn title(kind: &DecisionKind, provider: &str) -> String {
 fn body(kind: &DecisionKind) -> Option<String> {
     match kind {
         DecisionKind::Command { command, .. } => Some(command.clone()),
+        DecisionKind::Access { detail, .. } => detail.clone(),
         DecisionKind::FileChange { files, .. } if !files.is_empty() => {
             let mut shown: Vec<String> = files.iter().take(MAX_FILES).cloned().collect();
             if files.len() > MAX_FILES {
@@ -58,7 +75,7 @@ fn body(kind: &DecisionKind) -> Option<String> {
 fn reason(kind: &DecisionKind) -> Option<&str> {
     match kind {
         DecisionKind::Command { reason, .. } | DecisionKind::FileChange { reason, .. } => reason.as_deref(),
-        DecisionKind::Question { .. } => None,
+        DecisionKind::Question { .. } | DecisionKind::Access { .. } => None,
     }
 }
 
@@ -97,6 +114,8 @@ fn questions_height(ui: &Ui, theme: &Theme, questions: &[Question], inner: f32) 
 
 /// Draw the card in `rect` (use [`height`] with the same `code_max`).
 /// `protection` says what enforces the action; `folder` is where it runs.
+/// `decline_label` replaces "Skip" or "Deny" where declining means something
+/// else, such as stopping a turn whose question cannot be skipped.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
@@ -108,6 +127,7 @@ pub fn show(
     folder: &str,
     protection: &str,
     answers: &mut HashMap<String, String>,
+    decline_label: Option<&str>,
 ) -> Option<CardAction> {
     let c = &theme.color;
     let id = card_id(decision);
@@ -214,7 +234,7 @@ pub fn show(
     let question = matches!(decision.kind, DecisionKind::Question { .. });
     let primary_text = if question { "Send answer" } else { "Allow once" };
     let primary = super::raised_primary(ui, theme, id.with("allow"), pos2(x, bar), primary_text, Some("↵"));
-    let decline_text = if question { "Skip" } else { "Deny" };
+    let decline_text = decline_label.unwrap_or(if question { "Skip" } else { "Deny" });
     let decline =
         super::flat_text_button(ui, theme, id.with("deny"), pos2(rect.right() - PAD, bar), decline_text, Some("Esc"));
     let mut allow = primary.clicked();
@@ -240,10 +260,10 @@ pub fn show(
                 questions
                     .iter()
                     .map(|q| {
-                        (
-                            q.id.clone(),
-                            answers.get(&q.id).filter(|a| !a.trim().is_empty()).cloned().into_iter().collect(),
-                        )
+                        // Chosen options first (several for multi-select), then any free text.
+                        let mut given = if q.multi { chosen_options(answers, q) } else { Vec::new() };
+                        given.extend(answers.get(&q.id).filter(|a| !a.trim().is_empty()).cloned());
+                        (q.id.clone(), given)
                     })
                     .collect(),
             ),
@@ -280,7 +300,8 @@ fn draw_questions(
         y += gh + 8.0;
         let mut bx = x;
         for option in &q.options {
-            let chosen = answers.get(&q.id) == Some(option);
+            let chosen =
+                if q.multi { chosen_options(answers, q).contains(option) } else { answers.get(&q.id) == Some(option) };
             let galley = ui.painter().layout_no_wrap(option.clone(), theme.font(&theme.text.t_ui), c.text_primary);
             let w = galley.size().x + 20.0;
             let b = Rect::from_min_size(pos2(bx, y), vec2(w, 30.0));
@@ -297,7 +318,17 @@ fn draw_questions(
             ui.painter().galley(b.center() - galley.size() / 2.0, galley, c.text_primary);
             focus_ring(ui, theme, &r, theme.radius.radius_md);
             if r.clicked() && !sending {
-                answers.insert(q.id.clone(), option.clone());
+                if q.multi {
+                    let mut picked = chosen_options(answers, q);
+                    if let Some(at) = picked.iter().position(|p| p == option) {
+                        picked.remove(at);
+                    } else {
+                        picked.push(option.clone());
+                    }
+                    answers.insert(selection_key(q), picked.join(&SEPARATOR.to_string()));
+                } else {
+                    answers.insert(q.id.clone(), option.clone());
+                }
             }
             bx += w + 6.0;
         }

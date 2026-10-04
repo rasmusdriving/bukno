@@ -16,11 +16,13 @@ use egui::{Key, KeyboardShortcut, Modifiers, Ui};
 
 use crate::components::composer::{ComposerState, composer_id};
 use crate::evidence::Evidence;
-use crate::sources::{T3ChatRef, T3Source};
+use crate::sources::{PendingSend, T3ChatRef, T3Source, draft_key};
 use crate::theme::Theme;
 use crate::transcript::TranscriptView;
 use crate::transcript::document::Document;
 use crate::{navigation, screens};
+use bukno_t3_client::command::{Delivery, ModelChoice, Outgoing};
+use bukno_t3_client::hub::OutboxState;
 
 /// Draft autosave debounce (specification section 8).
 const DRAFT_DEBOUNCE: f64 = 0.25;
@@ -59,8 +61,19 @@ pub enum View {
     Chat,
     /// A new, empty chat waiting for its first message.
     NewChat,
-    /// A chat on a T3 server, read only ([`BuknoApp::remote`]).
+    /// A chat on a T3 server ([`BuknoApp::remote`]).
     Remote,
+    /// A new chat in a T3 project, before its first message ([`BuknoApp::remote_new`]).
+    RemoteNew,
+}
+
+/// A new T3 chat being written: where it starts and with which model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteNew {
+    pub environment: String,
+    pub project: String,
+    pub model: Option<ModelChoice>,
+    pub runtime_mode: String,
 }
 
 /// A message handed to the coordinator and not yet accepted or rejected.
@@ -161,10 +174,22 @@ pub struct BuknoApp {
     pub t3: Option<T3Source>,
     /// The T3 chat shown when the view is [`View::Remote`].
     pub remote: Option<T3ChatRef>,
+    pub remote_new: Option<RemoteNew>,
+    /// Pending T3 sends the client has reported at least once, by command ID.
+    /// Until then a send's absence only means the client has not picked it up.
+    pub remote_seen: std::collections::HashSet<String>,
+    /// Commands for the open T3 chat's cards, so a card shows "Sending…".
+    pub remote_answers: HashMap<String, String>,
+    /// The request the typed question answers belong to.
+    pub remote_answers_request: Option<String>,
     /// Show the T3 servers screen (Add environment and status).
     pub show_environments: bool,
     /// Which T3 projects are folded open in the sidebar, by (environment, project).
     pub t3_open_projects: HashMap<(String, String), bool>,
+    /// The composer revision last handed to the T3 draft store.
+    remote_draft_revision: u64,
+    /// The input time of the latest frame, for draft saves outside a frame.
+    last_time: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -253,8 +278,14 @@ impl BuknoApp {
             window_size: egui::Vec2::ZERO,
             t3: None,
             remote: None,
+            remote_new: None,
+            remote_seen: std::collections::HashSet::new(),
+            remote_answers: HashMap::new(),
+            remote_answers_request: None,
             show_environments: false,
             t3_open_projects: HashMap::new(),
+            remote_draft_revision: 0,
+            last_time: 0.0,
         }
     }
 
@@ -277,7 +308,12 @@ impl BuknoApp {
         let t3 = (std::env::var("BUKNO_T3").as_deref() != Ok("0")).then(|| T3Source::start(&paths.state_dir, ctx));
         let mut app =
             Self::with_mode(ctx, Theme::load(), Mode::Real, scenario, paths, Backend::Coordinator(coordinator), rx);
+        let last = t3.as_ref().and_then(T3Source::last_open);
         app.t3 = t3;
+        // Pick up where the user left off; nothing is resent.
+        if let Some(chat) = last {
+            app.select_remote(chat);
+        }
         app
     }
 
@@ -314,7 +350,7 @@ impl BuknoApp {
         match self.view {
             View::Chat if self.is_synthetic() => self.scenario.title,
             View::Chat => self.selected_summary().map_or("Chat", |c| c.title.as_str()),
-            View::NewChat => "New chat",
+            View::NewChat | View::RemoteNew => "New chat",
             View::Remote => self
                 .t3
                 .as_ref()
@@ -372,8 +408,8 @@ impl BuknoApp {
             (View::Chat, Some(previous)) => {
                 self.stash.insert(previous, current);
             }
-            // A T3 chat has no local state to keep.
-            (View::Remote, _) => {}
+            // A T3 chat's draft was kept by leave_remote.
+            (View::Remote | View::RemoteNew, _) => {}
             // The new-chat composer's draft is kept in memory for the next new chat.
             _ => {
                 self.stash.insert(NEW_CHAT, current);
@@ -395,7 +431,7 @@ impl BuknoApp {
     /// Show the new-chat screen, optionally in a project.
     pub fn new_chat(&mut self, project: Option<ProjectId>) {
         self.flush_draft();
-        let was_remote = self.view == View::Remote;
+        let was_remote = matches!(self.view, View::Remote | View::RemoteNew);
         self.leave_remote();
         if self.view == View::Chat || was_remote {
             let current = self.take_current();
@@ -410,13 +446,17 @@ impl BuknoApp {
         self.menu = None;
     }
 
-    /// Show a chat that lives on a T3 server. Read only: the composer is
-    /// replaced by a note, and the local chat's draft is kept for later.
+    /// Show a chat that lives on a T3 server, with its own saved draft. The
+    /// local chat's draft is kept for later.
     pub fn select_remote(&mut self, chat: T3ChatRef) {
         if self.view == View::Remote && self.remote.as_ref() == Some(&chat) {
             return;
         }
         self.flush_draft();
+        self.keep_remote_draft();
+        if matches!(self.view, View::Remote | View::RemoteNew) {
+            self.remote_new = None;
+        }
         match (self.view, self.selected) {
             (View::Chat, Some(previous)) => {
                 let current = self.take_current();
@@ -428,9 +468,14 @@ impl BuknoApp {
             }
             _ => {}
         }
-        self.put_current(ChatState::default());
+        let mut state = ChatState::default();
+        if let Some(t3) = self.t3.as_ref() {
+            state.composer.text = t3.draft(&draft_key(&chat.environment, Some(&chat.thread), None));
+        }
+        self.put_current(state);
         self.view = View::Remote;
         self.menu = None;
+        self.remote_answers.clear();
         self.doc = Document::default();
         self.transcript = TranscriptView::default();
         self.transcript.scroll_to_end();
@@ -440,21 +485,279 @@ impl BuknoApp {
         self.remote = Some(chat);
     }
 
+    /// Start a new chat in a T3 project, with the server's default model.
+    pub fn new_remote_chat(&mut self, environment: String, project: String) {
+        self.flush_draft();
+        self.keep_remote_draft();
+        match (self.view, self.selected) {
+            (View::Chat, Some(previous)) => {
+                let current = self.take_current();
+                self.stash.insert(previous, current);
+            }
+            (View::NewChat, _) => {
+                let current = self.take_current();
+                self.stash.insert(NEW_CHAT, current);
+            }
+            _ => {}
+        }
+        if self.view == View::Remote
+            && let Some(t3) = self.t3.as_mut()
+        {
+            t3.close_chat();
+        }
+        self.remote = None;
+        let model = self.t3.as_ref().and_then(|t| default_model(t, &environment));
+        let mut state = ChatState::default();
+        if let Some(t3) = self.t3.as_ref() {
+            state.composer.text = t3.draft(&draft_key(&environment, None, Some(&project)));
+        }
+        self.put_current(state);
+        self.remote_new = Some(RemoteNew { environment, project, model, runtime_mode: "approval-required".into() });
+        self.view = View::RemoteNew;
+        self.menu = None;
+    }
+
+    /// The draft key of the T3 composer on screen.
+    pub fn remote_draft_key(&self) -> Option<String> {
+        match self.view {
+            View::Remote => self.remote.as_ref().map(|c| draft_key(&c.environment, Some(&c.thread), None)),
+            View::RemoteNew => self.remote_new.as_ref().map(|n| draft_key(&n.environment, None, Some(&n.project))),
+            _ => None,
+        }
+    }
+
+    /// Hand the T3 composer's text to the draft store.
+    fn keep_remote_draft(&mut self) {
+        let (Some(key), now) = (self.remote_draft_key(), self.last_time) else { return };
+        let text = self.composer.text.clone();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.set_draft(&key, &text, now);
+            t3.save_drafts(now, 0.0);
+        }
+    }
+
     /// Stop following the open T3 chat when another chat is shown.
     fn leave_remote(&mut self) {
-        if self.view != View::Remote {
+        if !matches!(self.view, View::Remote | View::RemoteNew) {
             return;
         }
+        self.keep_remote_draft();
         if let Some(t3) = self.t3.as_mut() {
             t3.close_chat();
         }
         self.remote = None;
+        self.remote_new = None;
+    }
+
+    /// The environment the T3 view on screen belongs to.
+    pub fn remote_environment(&self) -> Option<&str> {
+        match self.view {
+            View::Remote => self.remote.as_ref().map(|c| c.environment.as_str()),
+            View::RemoteNew => self.remote_new.as_ref().map(|n| n.environment.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Why the T3 composer cannot send right now, if it cannot.
+    pub fn remote_send_blocked(&self) -> Option<&'static str> {
+        let t3 = self.t3.as_ref()?;
+        let env = self.remote_environment().and_then(|e| t3.environment(e));
+        let Some(env) = env else { return Some("This T3 server is not paired any more.") };
+        if !env.can_operate() {
+            return Some("Pair this server again to send from Bukno. Your draft is kept.");
+        }
+        if !env.ready_to_send() {
+            return Some("Not connected to T3. Your draft is kept.");
+        }
+        // Only the composer a pending message was sent from waits for it,
+        // from the moment it is sent, before the client has even reported it.
+        let key = self.remote_draft_key();
+        for pending in t3.pending_sends().iter().filter(|p| Some(&p.key) == key.as_ref()) {
+            match t3.command(&pending.environment, &pending.request.command_id).map(|e| &e.state) {
+                None | Some(OutboxState::Sending) => return Some("Sending…"),
+                Some(OutboxState::Unconfirmed) => {
+                    return Some("The last message is not confirmed yet. Your draft is kept.");
+                }
+                _ => {}
+            }
+        }
+        if self.view == View::RemoteNew && self.remote_new.as_ref().is_some_and(|n| n.model.is_none()) {
+            return Some("This T3 server offers no model to start a chat with.");
+        }
+        if self.view == View::Remote && t3.open_thread().is_some_and(|t| t.removed) {
+            return Some("This chat was deleted in T3.");
+        }
+        None
+    }
+
+    /// Send the T3 composer's text: a new chat, or a message in the open chat.
+    pub fn remote_submit(&mut self, delivery: Delivery) {
+        let body = self.composer.text.trim().to_owned();
+        if body.is_empty() || self.remote_send_blocked().is_some() {
+            return;
+        }
+        let Some(key) = self.remote_draft_key() else { return };
+        let Some(t3) = self.t3.as_ref() else { return };
+        self.notice = None;
+        let message_id = bukno_t3_client::command::new_id();
+        let (environment, outgoing) = match self.view {
+            View::RemoteNew => {
+                let Some(new) = self.remote_new.clone() else { return };
+                let Some(model) = new.model else { return };
+                let outgoing = Outgoing::Launch {
+                    thread_id: bukno_t3_client::command::new_id(),
+                    message_id,
+                    project_id: new.project,
+                    title: bukno_t3_client::command::title_from(&body),
+                    model,
+                    runtime_mode: new.runtime_mode,
+                    text: body.clone(),
+                };
+                (new.environment, outgoing)
+            }
+            View::Remote => {
+                let Some(chat) = self.remote.clone() else { return };
+                // While idle every send starts a turn; T3 picks the run itself.
+                let running = t3.open_thread().is_some_and(|t| t.active_run.is_some());
+                let delivery = if running { delivery } else { Delivery::Auto };
+                let outgoing = Outgoing::Send { thread_id: chat.thread, message_id, text: body.clone(), delivery };
+                (chat.environment, outgoing)
+            }
+            _ => return,
+        };
+        if let Some(t3) = self.t3.as_mut()
+            && let Err(e) = t3.send_tracked(&environment, &key, &body, outgoing)
+        {
+            self.notice = Some(format!("Not sent, because Bukno could not save it first ({e}). Your draft is kept."));
+            self.extra.notice_problem = true;
+        }
+    }
+
+    /// Stop the open T3 chat's running turn. Queued messages wait.
+    pub fn remote_stop(&mut self) {
+        let (Some(t3), Some(chat)) = (self.t3.as_ref(), self.remote.as_ref()) else { return };
+        let Some(run_id) = t3.open_thread().and_then(|t| t.active_run.clone()) else { return };
+        t3.dispatch(&chat.environment, Outgoing::Interrupt { thread_id: chat.thread.clone(), run_id });
+    }
+
+    /// Send a command about the open T3 chat. `key` ties it to a card, so
+    /// the card shows it is being sent.
+    pub fn remote_command(&mut self, key: Option<String>, outgoing: Outgoing) {
+        let (Some(t3), Some(chat)) = (self.t3.as_ref(), self.remote.as_ref()) else { return };
+        let command_id = t3.dispatch(&chat.environment, outgoing);
+        if let Some(key) = key {
+            self.remote_answers.insert(key, command_id);
+        }
+    }
+
+    /// Settle the T3 composer's pending send, and keep drafts saved.
+    fn poll_remote(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        self.last_time = now;
+        if let Some(key) = self.remote_draft_key()
+            && self.composer.revision != self.remote_draft_revision
+        {
+            self.remote_draft_revision = self.composer.revision;
+            let text = self.composer.text.clone();
+            if let Some(t3) = self.t3.as_mut() {
+                t3.set_draft(&key, &text, now);
+            }
+        }
+        if let Some(t3) = self.t3.as_mut()
+            && t3.save_drafts(now, DRAFT_DEBOUNCE)
+        {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(DRAFT_DEBOUNCE));
+        }
+        let pending: Vec<PendingSend> = self.t3.as_ref().map(|t| t.pending_sends().to_vec()).unwrap_or_default();
+        for send in pending {
+            self.settle_pending(&send, now);
+        }
+    }
+
+    /// Clear the draft of a send T3 accepted, or show why it refused.
+    fn settle_pending(&mut self, pending: &PendingSend, now: f64) {
+        let id = pending.request.command_id.clone();
+        let Some(t3) = self.t3.as_mut() else { return };
+        let known = t3.environment(&pending.environment).is_some();
+        let Some(entry) = t3.command(&pending.environment, &id).cloned() else {
+            if !known {
+                // Its server was removed: nothing can settle it any more.
+                t3.untrack(&id);
+                self.remote_seen.remove(&id);
+            } else if self.remote_seen.contains(&id) {
+                // The client lost it (pairing again replaced its task). It is
+                // still in doubt: hand it back. Only Dismiss forgets a send.
+                t3.adopt(&pending.environment, pending.request.clone());
+            }
+            return;
+        };
+        self.remote_seen.insert(id.clone());
+        if matches!(entry.state, OutboxState::Sending | OutboxState::Unconfirmed) {
+            return;
+        }
+        let here = self.remote_draft_key().as_ref() == Some(&pending.key);
+        match entry.state {
+            OutboxState::Rejected(reason) => {
+                // Nothing ran; the draft is still there to edit.
+                if here {
+                    self.notice = Some(reason);
+                    self.extra.notice_problem = true;
+                }
+                if let Some(t3) = self.t3.as_mut() {
+                    t3.untrack(&id);
+                    t3.dismiss_command(&pending.environment, &id);
+                }
+                self.remote_seen.remove(&id);
+            }
+            OutboxState::Accepted { thread_id, .. } => {
+                // Clear exactly the text that was sent; anything else typed
+                // stays. The cleared draft and the settled send are written
+                // together, so a quit cannot keep one without the other.
+                if here && self.composer.text.trim() == pending.draft {
+                    self.composer.text.clear();
+                    self.composer.revision += 1;
+                }
+                if let Some(t3) = self.t3.as_mut() {
+                    if t3.draft(&pending.key).trim() == pending.draft {
+                        t3.set_draft(&pending.key, "", now);
+                    }
+                    t3.untrack(&id);
+                }
+                self.remote_seen.remove(&id);
+                if matches!(entry.request.outgoing, Outgoing::Launch { .. })
+                    && here
+                    && let Some(thread) = thread_id
+                {
+                    let chat = T3ChatRef { environment: pending.environment.clone(), thread };
+                    self.keep_remote_draft();
+                    self.remote_new = None;
+                    self.view = View::Remote;
+                    self.select_remote_fresh(chat);
+                }
+            }
+            OutboxState::Sending | OutboxState::Unconfirmed => {}
+        }
+    }
+
+    /// Open a chat that was just created here, scrolled to its end.
+    fn select_remote_fresh(&mut self, chat: T3ChatRef) {
+        self.remote = None;
+        self.doc = Document::default();
+        self.transcript = TranscriptView::default();
+        self.transcript.scroll_to_end();
+        self.remote_answers.clear();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.open_chat(chat.clone());
+        }
+        self.remote = Some(chat);
     }
 
     /// Read what the T3 client published, and keep the open chat's document current.
-    fn poll_t3(&mut self) {
+    fn poll_t3(&mut self, ctx: &egui::Context) {
         let Some(t3) = self.t3.as_mut() else { return };
         t3.poll();
+        self.poll_remote(ctx);
+        let Some(t3) = self.t3.as_mut() else { return };
         if self.view != View::Remote {
             return;
         }
@@ -825,6 +1128,11 @@ impl BuknoApp {
             return;
         }
         self.flush_draft();
+        // T3 drafts are written now, not after the typing pause.
+        self.keep_remote_draft();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.flush();
+        }
         if self.work_active() {
             self.quit = QuitFlow::Asking;
         } else {
@@ -835,6 +1143,10 @@ impl BuknoApp {
 
     pub fn confirm_quit(&mut self) {
         self.flush_draft();
+        self.keep_remote_draft();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.flush();
+        }
         self.quit = QuitFlow::Closing;
         self.backend.send(UiCommand::Quit { stop: true });
     }
@@ -860,7 +1172,7 @@ impl BuknoApp {
         let ctx = ui.ctx().clone();
         self.evidence.frame_start(&ctx);
         self.apply_events(&ctx);
-        self.poll_t3();
+        self.poll_t3(&ctx);
         self.on_close_request(&ctx);
         crate::components::update_keyboard_mode(&ctx);
 
@@ -927,6 +1239,16 @@ impl BuknoApp {
 
 /// Stash key for the new-chat composer.
 const NEW_CHAT: TaskId = TaskId(0);
+
+/// The model a new chat on this server starts with: the first ready provider's
+/// default model.
+pub fn default_model(t3: &T3Source, environment: &str) -> Option<ModelChoice> {
+    let env = t3.environment(environment)?;
+    env.providers.iter().filter(|p| p.enabled && p.installed).find_map(|p| {
+        let model = p.models.iter().find(|m| m.is_default == Some(true)).or_else(|| p.models.first())?;
+        Some(ModelChoice { instance_id: p.instance_id.clone(), model: model.slug.clone() })
+    })
+}
 
 pub fn rejection_words(reason: &RejectReason) -> String {
     use RejectReason as R;

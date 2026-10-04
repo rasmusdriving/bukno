@@ -3,16 +3,20 @@
 //! A chat is either a local chat run by Bukno's own coordinator (the direct
 //! Codex path, unchanged) or a chat that lives on a T3 server. T3 chat
 //! references always carry the environment they belong to, so two servers
-//! can never be confused. T3 chats are read only in this version.
+//! can never be confused, and every command carries the chat it is for.
+//!
+//! T3 owns the chats. Bukno keeps only drafts and which chat was open, in
+//! `t3-client-state.json` in the state folder.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use bukno_core::ids::{ItemId, TaskId};
 use bukno_core::message::{ItemKind, Provider, TranscriptItem};
-use bukno_t3_client::hub::ThreadView;
+use bukno_t3_client::command::{CommandRequest, Outgoing};
+use bukno_t3_client::hub::{OutboxEntry, ThreadView};
 use bukno_t3_client::model::TurnKind;
 use bukno_t3_client::secret::SystemKeychain;
 use bukno_t3_client::thread::Row;
@@ -40,11 +44,51 @@ pub struct AddForm {
     pub link: String,
 }
 
+/// What Bukno keeps about T3 chats on this computer.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ClientState {
+    version: u32,
+    /// Draft text by [`draft_key`].
+    drafts: BTreeMap<String, String>,
+    last_open: Option<(String, String)>,
+    /// Sends T3 has not settled yet, kept across a restart so their outcome
+    /// is checked with their original IDs instead of the draft being sent
+    /// again as a new message.
+    pending: Vec<PendingSend>,
+}
+
+/// A message or new chat sent from a T3 composer and not settled yet.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSend {
+    pub environment: String,
+    /// The [`draft_key`] of the composer it was sent from.
+    pub key: String,
+    /// The text that was sent, trimmed. Only exactly this text is cleared.
+    pub draft: String,
+    pub request: CommandRequest,
+}
+
+/// The draft key of a chat, or of a new chat in a project.
+pub fn draft_key(environment: &str, thread: Option<&str>, project: Option<&str>) -> String {
+    match (thread, project) {
+        (Some(thread), _) => format!("{environment}/{thread}"),
+        (None, Some(project)) => format!("{environment}/new/{project}"),
+        (None, None) => format!("{environment}/new"),
+    }
+}
+
 pub struct T3Source {
     hub: Hub,
     pub view: HubView,
     pub open: Option<T3ChatRef>,
     pub form: AddForm,
+    state_file: PathBuf,
+    client: ClientState,
+    /// Unsaved draft changes since this time.
+    dirty_since: Option<f64>,
+    pub save_error: Option<String>,
     /// Per transcript item: what it was built from, and the revision given.
     signatures: HashMap<ItemId, (Vec<u64>, u64)>,
     next_revision: u64,
@@ -79,11 +123,24 @@ impl T3Source {
             file_log(state_dir),
         );
         let view = hub.view();
+        let state_file = state_dir.join("t3-client-state.json");
+        // A file that cannot be read starts empty; drafts are a convenience.
+        let client: ClientState =
+            std::fs::read(&state_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        // Sends from before the restart come back unconfirmed; the client
+        // settles them from the chat or offers Send again with the same IDs.
+        for pending in &client.pending {
+            hub.adopt(&pending.environment, pending.request.clone());
+        }
         Self {
             hub,
             view,
             open: None,
             form: AddForm::default(),
+            state_file,
+            client,
+            dirty_since: None,
+            save_error: None,
             signatures: HashMap::new(),
             next_revision: 0,
             built: None,
@@ -109,8 +166,10 @@ impl T3Source {
             self.hub.close_thread(&previous.environment);
         }
         self.hub.open_thread(&chat.environment, &chat.thread);
+        self.client.last_open = Some((chat.environment.clone(), chat.thread.clone()));
         self.open = Some(chat);
         self.built = None;
+        let _ = self.save();
     }
 
     pub fn close_chat(&mut self) {
@@ -118,6 +177,127 @@ impl T3Source {
             self.hub.close_thread(&previous.environment);
         }
         self.built = None;
+        if self.client.last_open.take().is_some() {
+            let _ = self.save();
+        }
+    }
+
+    /// The T3 chat that was open when Bukno last quit.
+    pub fn last_open(&self) -> Option<T3ChatRef> {
+        let (environment, thread) = self.client.last_open.clone()?;
+        Some(T3ChatRef { environment, thread })
+    }
+
+    pub fn draft(&self, key: &str) -> String {
+        self.client.drafts.get(key).cloned().unwrap_or_default()
+    }
+
+    /// Keep a draft; it is written to disk by [`Self::save_drafts`].
+    pub fn set_draft(&mut self, key: &str, text: &str, now: f64) {
+        let changed = if text.is_empty() {
+            self.client.drafts.remove(key).is_some()
+        } else {
+            self.client.drafts.insert(key.to_owned(), text.to_owned()).as_deref() != Some(text)
+        };
+        if changed && self.dirty_since.is_none() {
+            self.dirty_since = Some(now);
+        }
+    }
+
+    /// Write drafts once typing has paused for `debounce` seconds, or now.
+    pub fn save_drafts(&mut self, now: f64, debounce: f64) -> bool {
+        match self.dirty_since {
+            Some(since) if now - since >= debounce => {
+                let _ = self.save();
+                false
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    fn save(&mut self) -> Result<(), String> {
+        self.dirty_since = None;
+        self.client.version = 1;
+        let result = serde_json::to_vec_pretty(&self.client).map_err(|e| e.to_string()).and_then(|bytes| {
+            let temp = self.state_file.with_extension("json.tmp");
+            std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+            std::fs::rename(&temp, &self.state_file).map_err(|e| e.to_string())
+        });
+        self.save_error = result.clone().err();
+        result
+    }
+
+    /// Send a command to the environment; returns its command ID.
+    pub fn dispatch(&self, environment: &str, outgoing: Outgoing) -> String {
+        let request = CommandRequest::new(outgoing);
+        let id = request.command_id.clone();
+        self.hub.dispatch(environment, request);
+        id
+    }
+
+    /// Send a message or new chat from the composer with this draft key, and
+    /// keep it on disk until T3 settles it.
+    /// Nothing is sent unless the send is on disk first: a send T3 runs
+    /// whose IDs were never saved could be sent again after a restart.
+    pub fn send_tracked(
+        &mut self,
+        environment: &str,
+        key: &str,
+        draft: &str,
+        outgoing: Outgoing,
+    ) -> Result<String, String> {
+        let request = CommandRequest::new(outgoing);
+        let id = request.command_id.clone();
+        self.client.pending.push(PendingSend {
+            environment: environment.to_owned(),
+            key: key.to_owned(),
+            draft: draft.to_owned(),
+            request: request.clone(),
+        });
+        if let Err(e) = self.save() {
+            self.client.pending.retain(|p| p.request.command_id != id);
+            return Err(e);
+        }
+        self.hub.dispatch(environment, request);
+        Ok(id)
+    }
+
+    /// Hand a command the client lost (re-pairing replaced its task) back as unconfirmed.
+    pub fn adopt(&self, environment: &str, request: CommandRequest) {
+        self.hub.adopt(environment, request);
+    }
+
+    /// Write anything not yet on disk, now.
+    pub fn flush(&mut self) {
+        if self.dirty_since.is_some() {
+            let _ = self.save();
+        }
+    }
+
+    pub fn pending_sends(&self) -> &[PendingSend] {
+        &self.client.pending
+    }
+
+    pub fn untrack(&mut self, command_id: &str) {
+        let before = self.client.pending.len();
+        self.client.pending.retain(|p| p.request.command_id != command_id);
+        if self.client.pending.len() != before {
+            let _ = self.save();
+        }
+    }
+
+    /// Send an unconfirmed command again, with its original command ID.
+    pub fn retry(&self, environment: &str, command_id: &str) {
+        self.hub.retry(environment, command_id);
+    }
+
+    pub fn dismiss_command(&self, environment: &str, command_id: &str) {
+        self.hub.dismiss_command(environment, command_id);
+    }
+
+    pub fn command(&self, environment: &str, command_id: &str) -> Option<&OutboxEntry> {
+        self.environment(environment)?.command(command_id)
     }
 
     /// The open chat's thread view, once its first data has arrived.
@@ -208,7 +388,7 @@ impl T3Source {
                         out.push(item);
                         group.clear();
                     }
-                    out.push(self.message_item(task, row, provider, model));
+                    out.push(self.message_item(task, thread, row, provider, model));
                 }
                 _ => group.push(row),
             }
@@ -230,9 +410,19 @@ impl T3Source {
         }
     }
 
-    fn message_item(&mut self, task: TaskId, row: &Row, provider: Provider, model: Option<&str>) -> TranscriptItem {
+    fn message_item(
+        &mut self,
+        task: TaskId,
+        thread: &ThreadView,
+        row: &Row,
+        provider: Provider,
+        model: Option<&str>,
+    ) -> TranscriptItem {
         let id = ItemId(stable_id(&format!("{}/{}", row.source_thread_id, row.source_item_id)));
-        let revision = self.revision_for(id, vec![row.revision]);
+        // A queued message's caption follows its run, so the run's status is part of it.
+        let run_word =
+            row.item.run_id.as_ref().and_then(|r| thread.run_status.get(r)).map_or(0, |s| stable_id(s) as u64);
+        let revision = self.revision_for(id, vec![row.revision, run_word]);
         let (kind, text, completed) = match &row.item.kind {
             TurnKind::UserMessage { text, .. } => (ItemKind::UserMessage, text.clone(), true),
             TurnKind::AssistantMessage { text, streaming } => {
@@ -241,8 +431,11 @@ impl T3Source {
             TurnKind::ProposedPlan { markdown } => (ItemKind::AgentMessage { provider }, markdown.clone(), true),
             _ => unreachable!("only messages are passed here"),
         };
-        let meta = match row.item.kind {
-            TurnKind::UserMessage { .. } => None,
+        let meta = match &row.item.kind {
+            TurnKind::UserMessage { intent, .. } => {
+                let run = row.item.run_id.as_ref().and_then(|r| thread.run_status.get(r)).map(String::as_str);
+                user_caption(intent, run, provider)
+            }
             TurnKind::ProposedPlan { .. } => Some("Proposed plan".to_owned()),
             _ => model.map(str::to_owned),
         };
@@ -265,6 +458,19 @@ impl T3Source {
             completed,
             revision,
         }
+    }
+}
+
+/// What happened to a message sent while a turn was running, from T3's
+/// record of it (`inputIntent` and the run's status), never from what was asked.
+fn user_caption(intent: &str, run: Option<&str>, provider: Provider) -> Option<String> {
+    let name = crate::components::provider_name(provider);
+    match (intent, run) {
+        ("queued_turn", Some("queued")) => Some(format!("Queued for {name}'s next turn")),
+        ("queued_turn", Some("cancelled")) => Some("Removed from the queue".into()),
+        ("steer", _) => Some("Added to the running turn".into()),
+        ("promoted_queued_to_steer", _) => Some("Moved into the running turn".into()),
+        _ => None,
     }
 }
 
@@ -355,11 +561,14 @@ fn activity_line(row: &Row) -> String {
             let done = steps.iter().filter(|(_, s)| s == "completed").count();
             format!("Updated the to-do list ({done} of {} done)", steps.len())
         }
-        TurnKind::ApprovalRequest { request_kind, prompt } => match prompt {
-            Some(p) => format!("Asked for approval: {} (answer in T3)", first_line(p, 70)),
-            None => format!("Asked for approval to {request_kind} (answer in T3)"),
+        TurnKind::ApprovalRequest { request_kind, prompt, .. } => match prompt {
+            Some(p) => format!("Asked for approval: `{}`", first_line(&unwrap_shell(p), 70)),
+            None => format!("Asked for approval ({request_kind})"),
         },
-        TurnKind::UserInputRequest { questions } => format!("Asked {questions} question(s) (answer in T3)"),
+        TurnKind::UserInputRequest { questions, .. } => match questions.len() {
+            1 => format!("Asked: {}", first_line(&questions[0].question, 80)),
+            n => format!("Asked {n} questions"),
+        },
         TurnKind::Subagent { prompt, result } => {
             let state = if result.is_some() { "finished" } else { "working" };
             format!("Delegated a task, {state}: {}", first_line(prompt, 70))

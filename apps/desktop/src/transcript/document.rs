@@ -161,6 +161,8 @@ impl Document {
         }
         let parsed = parse(item);
         let keep_maps = !self.messages[index].completed || !item.completed;
+        // A user message's caption changes its height, so its blocks need a new layout.
+        let caption_changed = self.messages[index].role == Role::User && self.messages[index].meta != item.meta;
         let message = &mut self.messages[index];
         message.source = item.text.clone();
         message.meta = item.meta.clone();
@@ -180,7 +182,9 @@ impl Document {
                 // Keep the old revision when nothing changed, so cached layout survives.
                 let old = (ordinal < old_count).then(|| &self.blocks[first + ordinal]);
                 let revision = match old {
-                    Some(old) if old.kind == kind && old.text == text && old.spans == spans => old.revision,
+                    Some(old) if !caption_changed && old.kind == kind && old.text == text && old.spans == spans => {
+                        old.revision
+                    }
                     _ => {
                         last_block_revision += 1;
                         last_block_revision

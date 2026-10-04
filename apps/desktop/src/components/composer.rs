@@ -54,11 +54,16 @@ pub struct ComposerProps<'a> {
     /// Why Send is unavailable right now, shown beside the composer. The
     /// draft is never cleared while this is set.
     pub send_blocked: Option<&'a str>,
+    /// While running, offer Steer (add to the running turn) beside Send,
+    /// which then queues. Alt+Enter steers.
+    pub steer: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComposerAction {
     Send,
+    /// Send into the running turn instead of after it.
+    Steer,
     Stop,
     /// The permission control was clicked.
     Permission,
@@ -106,6 +111,7 @@ pub fn show(
     // Enter handling happens before the text field sees the events.
     if focused {
         let mut send = false;
+        let mut steer = false;
         ui.input_mut(|i| {
             let mut ime_activity = false;
             for event in &i.events {
@@ -123,15 +129,19 @@ pub fn show(
             i.events.retain(|event| match event {
                 Event::Key { key: Key::Enter, pressed, modifiers, .. } if !modifiers.shift && !composing => {
                     if *pressed {
-                        send = true;
+                        if modifiers.alt && props.steer && props.running {
+                            steer = true;
+                        } else {
+                            send = true;
+                        }
                     }
                     false
                 }
                 _ => true,
             });
         });
-        if send && !state.text.trim().is_empty() && props.send_blocked.is_none() {
-            action = Some(ComposerAction::Send);
+        if (send || steer) && !state.text.trim().is_empty() && props.send_blocked.is_none() {
+            action = Some(if steer { ComposerAction::Steer } else { ComposerAction::Send });
         }
     }
     if let Some(reason) = props.send_blocked
@@ -247,6 +257,14 @@ pub fn show(
                 action = Some(ComposerAction::Stop);
             }
             left = stop.left() - 4.0;
+            if props.steer && has_text {
+                let response =
+                    super::flat_text_button(ui, theme, id.with("steer"), pos2(left, bar.top()), "Steer", None);
+                if response.clicked() && can_send {
+                    action = Some(ComposerAction::Steer);
+                }
+                left = response.rect.left() - 4.0;
+            }
         }
         left
     };

@@ -10,6 +10,8 @@ pub enum DecisionKind {
     FileChange { files: Vec<String>, reason: Option<String> },
     /// One or more questions with optional choices.
     Question { questions: Vec<Question> },
+    /// Any other permission, such as reading a file: `what` names it.
+    Access { what: String, detail: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +22,8 @@ pub struct Question {
     pub options: Vec<String>,
     /// Free text is accepted besides the options.
     pub other: bool,
+    /// Several options may be chosen.
+    pub multi: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -22,7 +22,7 @@ pub struct Descriptor {
 
 /// The routing part of a model selection. Older records use `provider`
 /// instead of `instanceId`; T3 reads both the same way.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSelection {
     #[serde(default)]
@@ -31,11 +31,22 @@ pub struct ModelSelection {
     provider: Option<String>,
     #[serde(default)]
     pub model: String,
+    /// Model options such as `{"id": "reasoningEffort", "value": "high"}`.
+    #[serde(default)]
+    pub options: Vec<Value>,
 }
 
 impl ModelSelection {
     pub fn instance(&self) -> &str {
         self.instance_id.as_deref().or(self.provider.as_deref()).unwrap_or("")
+    }
+
+    /// The reasoning effort option, when the selection has one.
+    pub fn effort(&self) -> Option<&str> {
+        self.options
+            .iter()
+            .find(|o| o.get("id").and_then(Value::as_str).is_some_and(|id| id.to_lowercase().contains("effort")))
+            .and_then(|o| o.get("value").and_then(Value::as_str))
     }
 }
 
@@ -86,6 +97,9 @@ pub struct ThreadShell {
     pub deleted_at: Option<String>,
     #[serde(default)]
     pub lineage: Option<Value>,
+    /// `approval-required`, `auto-accept-edits`, `auto` or `full-access`.
+    #[serde(default)]
+    pub runtime_mode: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
@@ -190,6 +204,79 @@ impl ShellItem {
 pub struct Run {
     pub id: String,
     pub status: String,
+    #[serde(default)]
+    pub ordinal: u64,
+    /// The message that started (or waits to start) this run.
+    #[serde(default)]
+    pub user_message_id: Option<String>,
+    /// Position among queued runs, for a run with status `queued`.
+    #[serde(default)]
+    pub queue_position: Option<u64>,
+    /// Stop or a server restart held the queue until the user resumes it.
+    #[serde(default)]
+    pub queue_held: Option<bool>,
+}
+
+impl Run {
+    pub fn is_active(&self) -> bool {
+        matches!(self.status.as_str(), "preparing" | "starting" | "running" | "waiting")
+    }
+}
+
+/// An approval or question the provider is waiting on (`runtimeRequests`).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRequest {
+    pub id: String,
+    /// `command`, `file-read`, `file-change`, `mcp-elicitation`, `permission`,
+    /// `user_input`, `dynamic_tool_call` or `auth_refresh`.
+    pub kind: String,
+    /// `pending`, `resolved`, `expired` or `cancelled`.
+    pub status: String,
+    #[serde(default)]
+    pub response_capability: Value,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+impl RuntimeRequest {
+    /// `live`, `message` or `not_resumable`.
+    pub fn capability(&self) -> &str {
+        self.response_capability.get("type").and_then(Value::as_str).unwrap_or("live")
+    }
+}
+
+/// One choice of a question.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    /// What to send back; the label when absent.
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+impl QuestionOption {
+    pub fn answer(&self) -> &str {
+        self.value.as_deref().unwrap_or(&self.label)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    pub id: String,
+    #[serde(default)]
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default)]
+    pub multi_select: Option<bool>,
+    #[serde(default)]
+    pub allow_custom_answer: Option<bool>,
 }
 
 /// One attempt at a run. Steering can supersede an attempt; T3 then hides
@@ -208,6 +295,9 @@ pub struct RunAttempt {
 pub enum TurnKind {
     UserMessage {
         text: String,
+        message_id: String,
+        /// `turn_start`, `queued_turn`, `steer` or `promoted_queued_to_steer`.
+        intent: String,
         queued: bool,
     },
     AssistantMessage {
@@ -240,11 +330,15 @@ pub enum TurnKind {
         patterns: Vec<String>,
     },
     ApprovalRequest {
+        request_id: String,
         request_kind: String,
         prompt: Option<String>,
     },
     UserInputRequest {
-        questions: usize,
+        request_id: String,
+        questions: Vec<Question>,
+        /// Answered by sending a message rather than live (`message`).
+        message_mode: bool,
     },
     Subagent {
         prompt: String,
@@ -325,6 +419,8 @@ impl TurnItem {
         let kind = match type_name.as_str() {
             "user_message" => TurnKind::UserMessage {
                 text: text(value, "text"),
+                message_id: text(value, "messageId"),
+                intent: text(value, "inputIntent"),
                 queued: value.get("inputIntent").and_then(Value::as_str) == Some("queued_turn"),
             },
             "assistant_message" => {
@@ -357,11 +453,17 @@ impl TurnItem {
                     .unwrap_or_default(),
             },
             "approval_request" => TurnKind::ApprovalRequest {
+                request_id: text(value, "requestId"),
                 request_kind: text(value, "requestKind"),
                 prompt: opt_text(value, "prompt"),
             },
             "user_input_request" => TurnKind::UserInputRequest {
-                questions: value.get("questions").and_then(Value::as_array).map_or(0, Vec::len),
+                request_id: text(value, "requestId"),
+                questions: match value.get("questions") {
+                    Some(list) => Vec::<Question>::deserialize(list).map_err(|e| format!("questions: {e}"))?,
+                    None => Vec::new(),
+                },
+                message_mode: value.get("responseMode").and_then(Value::as_str) == Some("message"),
             },
             "subagent" => TurnKind::Subagent { prompt: text(value, "prompt"), result: opt_text(value, "result") },
             "system_notice" | "run_interrupt_request" | "run_interrupt_result" => {
@@ -427,6 +529,13 @@ pub struct ThreadSnapshot {
     pub runs: Vec<Run>,
     pub attempts: Vec<RunAttempt>,
     pub items: Vec<ProjectedItem>,
+    pub requests: Vec<RuntimeRequest>,
+    /// User message texts by message ID, from `messages`. A queued message
+    /// is here before it has a timeline row.
+    pub user_messages: Vec<(String, String)>,
+    /// The approval and question items from `turnItems`, which carry the text
+    /// of each request even when its row is outside the loaded window.
+    pub request_items: Vec<TurnItem>,
     /// Runs with an interrupt request anywhere in the chat, from the full
     /// `turnItems`, which also covers rows outside a bounded window.
     pub interrupt_request_runs: Vec<String>,
@@ -486,6 +595,12 @@ pub const KNOWN_EVENT_TYPES: &[&str] = &[
 pub enum ThreadEvent {
     TurnItem(TurnItem),
     Run(Run),
+    Request(RuntimeRequest),
+    /// A user message's text (`message.updated` with role `user`).
+    UserMessage {
+        id: String,
+        text: String,
+    },
     Attempt(RunAttempt),
     /// Thread metadata changed; the title is in the payload.
     Thread {
@@ -534,6 +649,34 @@ pub fn decode_snapshot(value: &Value, projection: &Value) -> Result<ThreadSnapsh
         Some(attempts) => Vec::<RunAttempt>::deserialize(attempts).map_err(|e| format!("attempts: {e}"))?,
         None => Vec::new(),
     };
+    let requests = match projection.get("runtimeRequests") {
+        Some(list) => Vec::<RuntimeRequest>::deserialize(list).map_err(|e| format!("runtime requests: {e}"))?,
+        None => Vec::new(),
+    };
+    let user_messages = projection
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+                .filter_map(|m| Some((opt_text(m, "id")?, text(m, "text"))))
+                .collect()
+        })
+        .unwrap_or_default();
+    let request_items = projection
+        .get("turnItems")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|i| {
+                    matches!(i.get("type").and_then(Value::as_str), Some("approval_request" | "user_input_request"))
+                })
+                .map(TurnItem::decode)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     let interrupt_request_runs = projection
         .get("turnItems")
         .and_then(Value::as_array)
@@ -552,6 +695,9 @@ pub fn decode_snapshot(value: &Value, projection: &Value) -> Result<ThreadSnapsh
         runs,
         attempts,
         items,
+        requests,
+        user_messages,
+        request_items,
         history_cursor: opt_text(value, "historyCursor"),
         has_more_history: flag(value, "hasMoreHistory"),
         latest_local_turn_ordinal: value.get("latestLocalTurnOrdinal").and_then(Value::as_u64),
@@ -581,6 +727,12 @@ impl ThreadItem {
                     "run.created" | "run.updated" => {
                         ThreadEvent::Run(Run::deserialize(payload).map_err(|e| format!("run: {e}"))?)
                     }
+                    "message.updated" if payload.get("role").and_then(Value::as_str) == Some("user") => {
+                        ThreadEvent::UserMessage { id: field(payload, "id")?, text: text(payload, "text") }
+                    }
+                    "runtime-request.updated" => ThreadEvent::Request(
+                        RuntimeRequest::deserialize(payload).map_err(|e| format!("runtime request: {e}"))?,
+                    ),
                     "run-attempt.created" | "run-attempt.updated" => {
                         ThreadEvent::Attempt(RunAttempt::deserialize(payload).map_err(|e| format!("run attempt: {e}"))?)
                     }

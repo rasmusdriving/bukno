@@ -18,9 +18,9 @@ use crate::transcript::column_rect;
 /// Height reserved after the last message for the working indicator.
 pub(crate) const WORKING_HEIGHT: f32 = 56.0;
 /// Transcript space left beside a decision card in a small window.
-const DECISION_TRANSCRIPT_MIN: f32 = 16.0;
+pub(crate) const DECISION_TRANSCRIPT_MIN: f32 = 16.0;
 /// Shortest a question card gets: its actions plus room to scroll the questions.
-const QUESTION_CARD_MIN: f32 = 220.0;
+pub(crate) const QUESTION_CARD_MIN: f32 = 220.0;
 
 /// The canvas part of the titlebar: a drag region with the breadcrumb.
 pub fn titlebar(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect, sidebar_shown: bool) {
@@ -102,7 +102,7 @@ pub fn titlebar(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect, sidebar_shown: bo
                 c.text_tertiary,
             );
         }
-        View::NewChat | View::Remote => {
+        View::NewChat | View::Remote | View::RemoteNew => {
             icons::paint(
                 painter,
                 Rect::from_center_size(pos2(x + 7.0, bar.center().y), vec2(14.0, 14.0)),
@@ -146,6 +146,13 @@ fn breadcrumb(app: &BuknoApp) -> (bool, String) {
             let label = env.map_or("T3", |e| e.saved.label.as_str());
             return (false, project.map_or_else(|| label.to_owned(), |p| format!("{label} / {p}")));
         }
+        View::RemoteNew => {
+            let new = app.remote_new.as_ref();
+            let env = app.t3.as_ref().zip(new).and_then(|(t, n)| t.environment(&n.environment));
+            let project = env.zip(new).and_then(|(e, n)| e.projects.iter().find(|p| p.id == n.project));
+            let label = env.map_or("T3", |e| e.saved.label.as_str());
+            return (false, project.map_or_else(|| label.to_owned(), |p| format!("{label} / {}", p.title)));
+        }
     };
     match project.and_then(|p| app.projects.iter().find(|x| x.id == p)) {
         Some(project) => (false, project.name.clone()),
@@ -159,6 +166,7 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, canvas: Rect) {
         View::NewChat => new_chat(app, ui, body),
         View::Chat => chat(app, ui, body),
         View::Remote => super::remote::chat(app, ui, body),
+        View::RemoteNew => super::remote::new_chat(app, ui, body),
     }
 }
 
@@ -227,9 +235,10 @@ fn draw_composer(app: &mut BuknoApp, ui: &mut Ui, rect: Rect) {
         permission: &permission,
         permission_menu: !app.is_synthetic(),
         send_blocked: app.send_blocked(),
+        steer: false,
     };
     match composer::show(ui, &theme, rect, &mut app.composer, &props) {
-        Some(ComposerAction::Send) => app.submit(),
+        Some(ComposerAction::Send | ComposerAction::Steer) => app.submit(),
         Some(ComposerAction::Stop) => app.stop(),
         Some(ComposerAction::Permission) => {
             app.menu = if app.menu == Some(Menu::Permission) { None } else { Some(Menu::Permission) };
@@ -713,6 +722,7 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                     folder.as_deref().unwrap_or(""),
                     protection,
                     &mut answers,
+                    None,
                 );
                 app.extra.answers = answers;
                 if count > 1 {
@@ -870,7 +880,7 @@ pub fn quit_dialog(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
     });
 }
 
-fn state_words(state: RunState) -> &'static str {
+pub(crate) fn state_words(state: RunState) -> &'static str {
     match state {
         RunState::Preparing => "Sending",
         RunState::Starting => "Starting",
