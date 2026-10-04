@@ -171,6 +171,7 @@ fn t3_operate_flow() {
     app.app().show_setup = false;
     app.pump(600);
     app.click("Add a T3 server");
+    app.click("Advanced connection");
     app.type_into("env-address", &address);
     app.type_into("env-link", &links[0]);
     app.pump(300);

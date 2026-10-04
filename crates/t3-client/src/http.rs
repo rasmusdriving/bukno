@@ -71,6 +71,7 @@ fn error_detail(body: &str) -> String {
 
 impl Http {
     pub fn new() -> Self {
+        crate::local::install_tls_provider();
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
             .connect_timeout(Duration::from_secs(5))

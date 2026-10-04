@@ -52,6 +52,7 @@ struct ClientState {
     /// Draft text by [`draft_key`].
     drafts: BTreeMap<String, String>,
     last_open: Option<(String, String)>,
+    preferred_project: Option<(String, String)>,
     /// Sends T3 has not settled yet, kept across a restart so their outcome
     /// is checked with their original IDs instead of the draft being sent
     /// again as a new message.
@@ -81,6 +82,8 @@ pub fn draft_key(environment: &str, thread: Option<&str>, project: Option<&str>)
 
 pub struct T3Source {
     hub: Hub,
+    local_config: bukno_t3_client::local::LocalConfig,
+    pub advanced_setup: bool,
     pub view: HubView,
     pub open: Option<T3ChatRef>,
     pub form: AddForm,
@@ -122,6 +125,10 @@ impl T3Source {
             Arc::new(move || repaint.request_repaint()),
             file_log(state_dir),
         );
+        let local_config = bukno_t3_client::local::LocalConfig::for_app(state_dir);
+        if std::env::var("BUKNO_T3_AUTO_SETUP").as_deref() != Ok("0") {
+            hub.setup_local(local_config.clone(), false);
+        }
         let view = hub.view();
         let state_file = state_dir.join("t3-client-state.json");
         // A file that cannot be read starts empty; drafts are a convenience.
@@ -134,6 +141,8 @@ impl T3Source {
         }
         Self {
             hub,
+            local_config,
+            advanced_setup: false,
             view,
             open: None,
             form: AddForm::default(),
@@ -155,6 +164,40 @@ impl T3Source {
         }
         self.view = self.hub.view();
         true
+    }
+
+    pub fn prefer_project(&mut self, environment: &str, project: &str) {
+        self.client.preferred_project = Some((environment.to_owned(), project.to_owned()));
+        let _ = self.save();
+    }
+
+    pub fn preferred_project(&self) -> Option<(String, String)> {
+        self.client.preferred_project.clone()
+    }
+
+    pub fn setup_local(&self, install: bool) {
+        self.hub.setup_local(self.local_config.clone(), install);
+    }
+
+    pub fn add_local_project(&self, path: PathBuf) {
+        self.hub.add_local_project(path);
+    }
+
+    pub fn ready_environment(&self) -> Option<&EnvironmentView> {
+        let preferred = match &self.view.local_setup {
+            bukno_t3_client::local::SetupStatus::Ready { environment_id, .. } => Some(environment_id.as_str()),
+            _ => None,
+        };
+        let ready = |e: &&Arc<EnvironmentView>| {
+            e.can_operate() && matches!(e.status, bukno_t3_client::ConnectionStatus::Connected { current: true })
+        };
+        self.view
+            .environments
+            .iter()
+            .filter(ready)
+            .find(|e| Some(e.saved.environment_id.as_str()) == preferred)
+            .or_else(|| self.view.environments.iter().find(ready))
+            .map(Arc::as_ref)
     }
 
     pub fn environment(&self, id: &str) -> Option<&EnvironmentView> {

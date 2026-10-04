@@ -83,6 +83,7 @@ fn t3_read_only_flow() {
     app.shot(&mut run, "add-environment-empty");
 
     // Wrong address: nothing answers. The link is not sent anywhere.
+    app.click("Advanced connection");
     app.type_into("env-address", "http://127.0.0.1:9");
     app.type_into("env-link", &links[0]);
     app.click("Connect");

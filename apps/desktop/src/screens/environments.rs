@@ -50,6 +50,8 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
             pos2(left, y),
         ) + 24.0;
 
+        y = super::setup::local_card(app, ui, &theme, pos2(left, y), COLUMN) + 24.0;
+
         let Some(t3) = app.t3.as_ref() else { return };
         let environments = t3.view.environments.clone();
         let pairing = t3.view.pairing.clone();
@@ -131,52 +133,59 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
             y += 56.0;
         }
 
-        // Add environment.
-        painter.text(pos2(left, y), Align2::LEFT_TOP, "Add environment", theme.font(&theme.text.t_title), c.text_primary);
-        y += 34.0;
-        y += text_at(
-            ui,
-            &theme,
-            "Create a pairing link in T3 (Settings, Connections, or `t3 pair` on the server) and paste it here. Use an address this computer can reach, such as the server's Tailscale IP and port.",
-            &theme.text.t_small,
-            c.text_secondary,
-            pos2(left, y),
-        ) + 12.0;
-        let field = |ui: &mut Ui, y: f32, label: &str, id: &str, value: &mut String, password: bool, hint: &str| {
-            ui.painter().text(pos2(left, y), Align2::LEFT_TOP, label, theme.font(&theme.text.t_small), c.text_secondary);
-            let rect = Rect::from_min_size(pos2(left, y + 20.0), vec2(COLUMN, 32.0));
-            ui.put(
-                rect,
-                TextEdit::singleline(value)
-                    .id(Id::new(id))
-                    .password(password)
-                    .hint_text(hint)
-                    .font(theme.font(&theme.text.t_ui))
-                    .margin(vec2(10.0, 8.0)),
-            );
-            y + 64.0
-        };
+        let (advanced, _) = button(ui, &theme, Id::new("env-advanced"), pos2(left, y), "Advanced connection", false);
+        y += 48.0;
         let Some(t3) = app.t3.as_mut() else { return };
-        y = field(ui, y, "Address", "env-address", &mut t3.form.address, false, "http://100.127.119.35:3773");
-        y = field(ui, y, "Pairing link", "env-link", &mut t3.form.link, true, "Paste the link from T3");
-        let busy = pairing == PairingStatus::Working;
-        let ready = !t3.form.link.trim().is_empty() && !busy;
+        if advanced.clicked() { t3.advanced_setup = !t3.advanced_setup; }
         let mut connect = false;
-        ui.add_enabled_ui(ready, |ui| {
-            let (go, _) = button(ui, &theme, Id::new("env-connect"), pos2(left, y), "Connect", true);
-            connect = go.clicked();
-        });
-        let (done, _) = button(ui, &theme, Id::new("env-done"), pos2(left + COLUMN - 72.0, y), "Done", false);
-        y += 44.0;
-        let (message, problem) = match &pairing {
-            PairingStatus::Idle => (None, false),
-            PairingStatus::Working => (Some("Checking the server and pairing…".to_owned()), false),
-            PairingStatus::Failed(why) => (Some(why.clone()), true),
-            PairingStatus::Paired { label, .. } => (Some(format!("Paired with {label}. Its chats are in the sidebar.")), false),
-        };
-        if let Some(message) = message {
-            y += text_at(ui, &theme, &message, &theme.text.t_ui, if problem { c.negative } else { c.text_secondary }, pos2(left, y));
+        if t3.advanced_setup {
+            painter.text(pos2(left, y), Align2::LEFT_TOP, "Connect another server", theme.font(&theme.text.t_title), c.text_primary);
+            y += 34.0;
+            y += text_at(
+                ui,
+                &theme,
+                "For a server on another computer, copy its pairing link from T3 Code settings. Paste it below. The address is optional when the link already contains it.",
+                &theme.text.t_small,
+                c.text_secondary,
+                pos2(left, y),
+            ) + 12.0;
+            let field = |ui: &mut Ui, y: f32, label: &str, id: &str, value: &mut String, password: bool, hint: &str| {
+                ui.painter().text(pos2(left, y), Align2::LEFT_TOP, label, theme.font(&theme.text.t_small), c.text_secondary);
+                let rect = Rect::from_min_size(pos2(left, y + 20.0), vec2(COLUMN, 32.0));
+                ui.put(
+                    rect,
+                    TextEdit::singleline(value)
+                        .id(Id::new(id))
+                        .password(password)
+                        .hint_text(hint)
+                        .font(theme.font(&theme.text.t_ui))
+                        .margin(vec2(10.0, 8.0)),
+                );
+                y + 64.0
+            };
+
+            y = field(ui, y, "Address", "env-address", &mut t3.form.address, false, "Optional server address");
+            y = field(ui, y, "Pairing link", "env-link", &mut t3.form.link, true, "Paste the link from T3");
+            let busy = pairing == PairingStatus::Working;
+            let ready = !t3.form.link.trim().is_empty() && !busy;
+
+            ui.add_enabled_ui(ready, |ui| {
+                let (go, _) = button(ui, &theme, Id::new("env-connect"), pos2(left, y), "Connect", true);
+                connect = go.clicked();
+            });
+            y += 44.0;
+            let (message, problem) = match &pairing {
+                PairingStatus::Idle => (None, false),
+                PairingStatus::Working => (Some("Checking the server and pairing…".to_owned()), false),
+                PairingStatus::Failed(why) => (Some(why.clone()), true),
+                PairingStatus::Paired { label, .. } => (Some(format!("Paired with {label}. Its chats are in the sidebar.")), false),
+            };
+            if let Some(message) = message {
+                y += text_at(ui, &theme, &message, &theme.text.t_ui, if problem { c.negative } else { c.text_secondary }, pos2(left, y));
+            }
         }
+        let (done, _) = button(ui, &theme, Id::new("env-done"), pos2(left, y), "Done", false);
+        y += 44.0;
         if let Some(error) = store_error {
             y += 8.0;
             y += text_at(ui, &theme, &error, &theme.text.t_small, c.negative, pos2(left, y));

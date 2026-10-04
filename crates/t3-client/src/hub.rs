@@ -18,6 +18,7 @@ use url::Url;
 use crate::command::{CommandRequest, Outgoing};
 use crate::error::T3Error;
 use crate::http::Http;
+use crate::local::{LocalConfig, LocalTarget, SetupStatus};
 use crate::model::{ProjectShell, Provider, ServerConfig, ShellItem, ThreadItem, ThreadShell};
 use crate::pairing::{parse_pairing, socket_url};
 use crate::rpc::{Method, Session, StreamEvent, Subscription};
@@ -155,6 +156,7 @@ pub struct HubView {
     pub environments: Vec<Arc<EnvironmentView>>,
     pub pairing: PairingStatus,
     pub store_error: Option<String>,
+    pub local_setup: SetupStatus,
 }
 
 enum EnvCommand {
@@ -180,6 +182,8 @@ struct Shared {
     views: Mutex<BTreeMap<String, Arc<EnvironmentView>>>,
     pairing: Mutex<PairingStatus>,
     store_error: Mutex<Option<String>>,
+    local_setup: Mutex<SetupStatus>,
+    local_target: Mutex<Option<Arc<LocalTarget>>>,
     revision: AtomicU64,
     /// The running task of each environment, with its generation.
     tasks: Mutex<BTreeMap<String, (u64, mpsc::UnboundedSender<EnvCommand>)>>,
@@ -244,6 +248,8 @@ impl Hub {
             views: Mutex::new(BTreeMap::new()),
             pairing: Mutex::new(PairingStatus::Idle),
             store_error: Mutex::new(store_error),
+            local_setup: Mutex::new(SetupStatus::Idle),
+            local_target: Mutex::new(None),
             revision: AtomicU64::new(1),
             tasks: Mutex::new(BTreeMap::new()),
             next_generation: AtomicU64::new(1),
@@ -261,6 +267,7 @@ impl Hub {
             environments: self.shared.views.lock().unwrap().values().cloned().collect(),
             pairing: self.shared.pairing.lock().unwrap().clone(),
             store_error: self.shared.store_error.lock().unwrap().clone(),
+            local_setup: self.shared.local_setup.lock().unwrap().clone(),
         }
     }
 
@@ -335,6 +342,88 @@ impl Hub {
         self.shared.changed();
     }
 
+    /// Find, start and sign in to a local T3. Download only after an explicit
+    /// click. The mutex check prevents overlapping setup actions.
+    pub fn setup_local(&self, config: LocalConfig, install: bool) {
+        {
+            let mut status = self.shared.local_setup.lock().unwrap();
+            if status.busy() {
+                return;
+            }
+            *status = SetupStatus::Working("Looking for T3 Code…".into());
+        }
+        self.shared.changed();
+        let shared = self.shared.clone();
+        self.runtime.spawn(async move {
+            let progress = |text: &str| {
+                *shared.local_setup.lock().unwrap() = SetupStatus::Working(text.into());
+                shared.changed();
+            };
+            let result = async {
+                let Some(target) = crate::local::prepare(&config, install, &progress).await? else {
+                    return Ok(SetupStatus::Missing);
+                };
+                let id = target.descriptor.environment_id.clone();
+                let existing = shared.saved.lock().unwrap().iter().find(|e| e.environment_id == id).cloned();
+                let needs_pairing = shared
+                    .views
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .is_some_and(|v| matches!(v.status, ConnectionStatus::NeedsPairing { .. }));
+                if let Some(mut saved) = existing
+                    .filter(|e| e.can_operate() && e.token_expires_at > time::now_epoch_secs() && !needs_pairing)
+                    && shared.vault.load(&id).map_err(|e| e.user_message())?.is_some()
+                {
+                    progress("Connecting to T3 Code…");
+                    if saved.address != target.base.to_string() {
+                        saved.address = target.base.to_string();
+                        save_and_activate(&shared, saved)?;
+                    }
+                } else {
+                    progress("Connecting to T3 Code…");
+                    let credential = target.credential().await?;
+                    pair_request(
+                        &shared,
+                        crate::pairing::PairingRequest { base: target.base.clone(), credential },
+                        "Bukno",
+                    )
+                    .await?;
+                }
+                let status = SetupStatus::Ready { environment_id: id, label: target.descriptor.label.clone() };
+                *shared.local_target.lock().unwrap() = Some(Arc::new(target));
+                Ok::<_, String>(status)
+            }
+            .await;
+            *shared.local_setup.lock().unwrap() = result.unwrap_or_else(SetupStatus::Failed);
+            shared.changed();
+        });
+    }
+
+    pub fn add_local_project(&self, path: std::path::PathBuf) {
+        let Some(target) = self.shared.local_target.lock().unwrap().clone() else { return };
+        {
+            let mut status = self.shared.local_setup.lock().unwrap();
+            if status.busy() {
+                return;
+            }
+            *status = SetupStatus::Working("Preparing your chat folder…".into());
+        }
+        self.shared.changed();
+        let shared = self.shared.clone();
+        self.runtime.spawn(async move {
+            let status = match target.add_project(&path).await {
+                Ok(()) => SetupStatus::Ready {
+                    environment_id: target.descriptor.environment_id.clone(),
+                    label: target.descriptor.label.clone(),
+                },
+                Err(error) => SetupStatus::Failed(error),
+            };
+            *shared.local_setup.lock().unwrap() = status;
+            shared.changed();
+        });
+    }
+
     /// Pair with a server. The result arrives as [`HubView::pairing`].
     pub fn pair(&self, address: &str, link: &str, label: &str) {
         let request = match parse_pairing(Some(address), link) {
@@ -345,75 +434,69 @@ impl Hub {
         let shared = self.shared.clone();
         let label = label.to_owned();
         self.runtime.spawn(async move {
-            let log = shared.log.clone();
-            log(&format!("pair: checking {}", request.base));
-            let result: Result<SavedEnvironment, T3Error> = async {
-                let descriptor = shared.http.descriptor(&request.base).await?;
-                log(&format!(
-                    "pair: {} is {} ({}), server {}",
-                    request.base, descriptor.label, descriptor.environment_id, descriptor.server_version
-                ));
-                let access = shared.http.exchange(&request.base, &request.credential, &label).await?;
-                shared.vault.save(&descriptor.environment_id, &access.token)?;
-                Ok(SavedEnvironment {
-                    environment_id: descriptor.environment_id,
-                    label: descriptor.label,
-                    address: request.base.to_string(),
-                    server_version: descriptor.server_version,
-                    token_expires_at: access.expires_at_epoch,
-                    scope: access.scope,
-                    paired_at: time::now_epoch_secs(),
-                })
+            if let Err(error) = pair_request(&shared, request, &label).await {
+                shared.set_pairing(PairingStatus::Failed(error));
             }
-            .await;
-            let saved = match result {
-                Ok(saved) => saved,
-                Err(e) => {
-                    log(&format!("pair: failed: {e:?}"));
-                    return shared.set_pairing(PairingStatus::Failed(e.user_message()));
-                }
-            };
-            log(&format!("pair: paired with {} ({}), scope {}", saved.label, saved.environment_id, saved.scope));
-            let all: Vec<SavedEnvironment> = {
-                let mut list = shared.saved.lock().unwrap();
-                list.retain(|e| e.environment_id != saved.environment_id);
-                list.push(saved.clone());
-                list.clone()
-            };
-            if let Err(e) = shared.store.save(&all) {
-                let message = format!("Paired, but the environment list could not be saved: {e}");
-                return shared.set_pairing(PairingStatus::Failed(message));
-            }
-            // Re-pairing replaces the running task, which then uses the new
-            // sign-in. The chat open on screen stays open on the new task.
-            let (open, carried) = {
-                let views = shared.views.lock().unwrap();
-                let view = views.get(&saved.environment_id);
-                let open = view.and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
-                // Commands still in doubt keep their IDs on the new task, so
-                // they are settled or sent again with the same ones.
-                let carried: Vec<OutboxEntry> = view
-                    .map(|v| {
-                        v.outbox
-                            .iter()
-                            .filter(|e| e.unsettled())
-                            .map(|e| OutboxEntry { state: OutboxState::Unconfirmed, ..e.clone() })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (open, carried)
-            };
-            if let Some((_, previous)) = shared.tasks.lock().unwrap().remove(&saved.environment_id) {
-                let _ = previous.send(EnvCommand::Forget);
-            }
-            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone(), open, carried);
-            shared.set_pairing(PairingStatus::Paired { environment_id: saved.environment_id, label: saved.label });
         });
     }
 
     pub fn clear_pairing_status(&self) {
         self.shared.set_pairing(PairingStatus::Idle);
     }
+}
+
+async fn pair_request(
+    shared: &Arc<Shared>,
+    request: crate::pairing::PairingRequest,
+    label: &str,
+) -> Result<(), String> {
+    let descriptor = shared.http.descriptor(&request.base).await.map_err(|e| e.user_message())?;
+    let access = shared.http.exchange(&request.base, &request.credential, label).await.map_err(|e| e.user_message())?;
+    shared.vault.save(&descriptor.environment_id, &access.token).map_err(|e| e.user_message())?;
+    let saved = SavedEnvironment {
+        environment_id: descriptor.environment_id,
+        label: descriptor.label,
+        address: request.base.to_string(),
+        server_version: descriptor.server_version,
+        token_expires_at: access.expires_at_epoch,
+        scope: access.scope,
+        paired_at: time::now_epoch_secs(),
+    };
+    (shared.log)(&format!("pair: paired with {} ({}), scope {}", saved.label, saved.environment_id, saved.scope));
+    save_and_activate(shared, saved.clone())?;
+    shared.set_pairing(PairingStatus::Paired { environment_id: saved.environment_id, label: saved.label });
+    Ok(())
+}
+
+fn save_and_activate(shared: &Arc<Shared>, saved: SavedEnvironment) -> Result<(), String> {
+    let all = {
+        let mut list = shared.saved.lock().unwrap();
+        list.retain(|e| e.environment_id != saved.environment_id);
+        list.push(saved.clone());
+        list.clone()
+    };
+    shared.store.save(&all).map_err(|e| format!("The connection could not be saved: {e}"))?;
+    // Carry unsettled sends and the open chat when replacing a connection.
+    let (open, carried) = {
+        let views = shared.views.lock().unwrap();
+        let view = views.get(&saved.environment_id);
+        let open = view.and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
+        let carried = view
+            .map(|v| {
+                v.outbox
+                    .iter()
+                    .filter(|e| e.unsettled())
+                    .map(|e| OutboxEntry { state: OutboxState::Unconfirmed, ..e.clone() })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (open, carried)
+    };
+    if let Some((_, previous)) = shared.tasks.lock().unwrap().remove(&saved.environment_id) {
+        let _ = previous.send(EnvCommand::Forget);
+    }
+    spawn_environment(shared, &tokio::runtime::Handle::current(), saved, open, carried);
+    Ok(())
 }
 
 fn spawn_environment(

@@ -8,15 +8,30 @@ publish.workspace = true
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 keyring = "4.2"
-# No TLS in Stage 1: direct pairing uses plain HTTP over the LAN or tailnet, and
-# TLS crates compile C that the cross-platform Windows check cannot build.
+# Downloads use HTTPS. Direct server pairing still uses
+# the existing HTTP transport over loopback or a private network.
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+fs2 = "0.4"
+libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["net", "macros", "time", "sync", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["net", "macros", "time", "sync", "rt-multi-thread", "process", "io-util"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 url = "2"
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[target.'cfg(windows)'.dependencies]
+# Schannel needs no cross-compiled C library for the Windows type check.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 
 [lints]

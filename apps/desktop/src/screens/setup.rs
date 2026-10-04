@@ -1,10 +1,11 @@
-//! Setup (journey screen 1.1): the engines Bukno found, how they are signed
-//! in, and the work folder for chats without a project. Also the screen for
-//! when Bukno cannot run at all.
+//! Automatic T3 onboarding, with the existing direct Codex recovery setup.
+//! The native screen only reads published status; setup runs in the client.
 
 use bukno_runtime::engines::{EngineState, EngineView, Revert};
 use bukno_runtime::{EngineAction, UiCommand};
-use egui::{Align2, Id, Rect, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use bukno_t3_client::ConnectionStatus;
+use bukno_t3_client::local::SetupStatus;
+use egui::{Align2, Id, Rect, ScrollArea, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
 
 use crate::app::BuknoApp;
 use crate::components::icons::{self, Icon};
@@ -61,7 +62,161 @@ fn wrapped(
     h
 }
 
+/// The default onboarding uses T3. The direct Codex setup remains available
+/// when T3 is explicitly disabled for development or recovery.
 pub fn show(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
+    if app.t3.is_none() {
+        return show_direct(app, ui, full);
+    }
+    let theme = app.theme.clone();
+    let c = &theme.color;
+    let left = full.center().x - COLUMN / 2.0;
+    let area = Rect::from_min_max(pos2(left - 24.0, full.top() + 44.0), pos2(left + COLUMN + 24.0, full.bottom()));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    ScrollArea::vertical().id_salt("setup-t3").auto_shrink([false, false]).show(&mut child, |ui| {
+        ui.set_width(area.width());
+        let origin = ui.cursor().min;
+        let left = origin.x + 24.0;
+        let mut y = origin.y + 28.0;
+        ui.painter().text(pos2(left, y), Align2::LEFT_TOP, "bukno", theme.font(&theme.text.t_ui_strong), c.text_secondary);
+        y += 30.0;
+        ui.painter().text(pos2(left, y), Align2::LEFT_TOP, "Let's get you connected", theme.font(&theme.text.t_display), c.text_primary);
+        y += 52.0;
+        y += wrapped(ui, &theme, "Bukno uses T3 Code to run Codex and Claude. We'll find it on this computer and connect for you. If it's missing, one download gets it ready.", &theme.text.t_body, c.text_secondary, pos2(left, y), COLUMN) + 24.0;
+        y = local_card(app, ui, &theme, pos2(left, y), COLUMN) + 24.0;
+        let ready = app.t3.as_ref().and_then(|t| t.ready_environment()).map(|e| (e.saved.environment_id.clone(), e.projects.first().map(|p| p.id.clone())));
+        let folder = app.setup.as_ref().and_then(|s| s.work_folder.clone());
+        let missing = app.setup.as_ref().is_some_and(|s| s.work_folder_missing);
+        let needs_folder = ready.as_ref().is_none_or(|(_, project)| project.is_none());
+        if needs_folder {
+            ui.painter().text(pos2(left, y), Align2::LEFT_TOP, "Your chat folder", theme.font(&theme.text.t_title), c.text_primary);
+            y += 32.0;
+            y += wrapped(ui, &theme, folder.as_deref().unwrap_or("Choose where chats without a project can keep their files."), &theme.text.t_small, c.text_secondary, pos2(left, y), COLUMN) + 12.0;
+            let mut x = left;
+            if folder.is_none() {
+                let (recommended, width) = button(ui, &theme, Id::new("setup-recommended-folder"), pos2(x, y), "Use recommended folder", false);
+                x += width + 8.0;
+                if recommended.clicked() {
+                    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(std::path::PathBuf::from);
+                    if let Some(home) = home {
+                        let path = home.join("Documents/Bukno chats");
+                        match std::fs::create_dir_all(&path) {
+                            Ok(()) => app.send_command(UiCommand::SetWorkFolder { path }),
+                            Err(_) => app.banner = Some("The recommended folder could not be created. Choose another folder.".into()),
+                        }
+                    }
+                }
+            }
+            let (choose, _) = button(ui, &theme, Id::new("setup-work-folder"), pos2(x, y), if folder.is_some() { "Change folder…" } else { "Choose folder…" }, false);
+            if choose.clicked() && let Some(path) = pick_folder("Choose your chat folder") {
+                app.send_command(UiCommand::SetWorkFolder { path });
+            }
+            y += 48.0;
+            if missing {
+                y += wrapped(ui, &theme, "This folder is unavailable. Connect its drive or choose another folder.", &theme.text.t_small, c.negative, pos2(left, y), COLUMN) + 12.0;
+            }
+        }
+        let busy = app.t3.as_ref().is_some_and(|t| t.view.local_setup.busy());
+        let local_project = ready.as_ref().is_some_and(|(environment, _)| app.t3.as_ref().is_some_and(|t| matches!(&t.view.local_setup, SetupStatus::Ready { environment_id, .. } if environment_id == environment)));
+        let can_continue = ready.is_some() && (!needs_folder || (local_project && folder.is_some() && !missing)) && !busy && app.finish_t3_setup.is_none();
+        if let Some(env) = app.t3.as_ref().and_then(|t| t.ready_environment()) {
+            let hint = env.projects.first().map(|p| format!("Continue opens a new chat in {}. Your other projects are in the sidebar.", p.title))
+                .unwrap_or_else(|| if local_project { "Bukno will prepare this folder for your first chat.".into() } else { "Add your first project in T3 Code before continuing.".into() });
+            y += wrapped(ui, &theme, &hint, &theme.text.t_small, c.text_secondary, pos2(left, y), COLUMN) + 16.0;
+        }
+        ui.add_enabled_ui(can_continue, |ui| {
+            let (go, _) = button(ui, &theme, Id::new("setup-continue"), pos2(left, y), if app.finish_t3_setup.is_some() { "Preparing chats…" } else { "Continue" }, true);
+            if go.clicked() && let Some((environment, project)) = ready {
+                if let Some(project) = project {
+                    app.show_setup = false;
+                    app.new_remote_chat(environment, project);
+                } else if let Some(folder) = folder {
+                    let path = std::fs::canonicalize(&folder).unwrap_or_else(|_| folder.into());
+                    app.finish_t3_setup = Some((environment, path.clone()));
+                    if let Some(t3) = app.t3.as_ref() { t3.add_local_project(path); }
+                }
+            }
+        });
+        y += 48.0;
+        let (advanced, _) = button(ui, &theme, Id::new("setup-advanced"), pos2(left, y), "Advanced connection", false);
+        if advanced.clicked() {
+            if let Some(t3) = app.t3.as_mut() { t3.advanced_setup = true; }
+            app.show_environments = true;
+        }
+        y += 48.0;
+        if let Some(banner) = &app.banner {
+            y += wrapped(ui, &theme, banner, &theme.text.t_small, c.attention, pos2(left, y), COLUMN);
+        }
+        ui.allocate_space(vec2(area.width(), (y - origin.y + 24.0).max(0.0)));
+    });
+}
+
+/// Shared local setup card, also shown in connection settings.
+pub fn local_card(app: &mut BuknoApp, ui: &mut Ui, theme: &Theme, at: egui::Pos2, width: f32) -> f32 {
+    let Some(t3) = app.t3.as_ref() else { return at.y };
+    let c = &theme.color;
+    let status = t3.view.local_setup.clone();
+    let local = match &status {
+        SetupStatus::Ready { environment_id, .. } => t3.environment(environment_id),
+        _ => None,
+    };
+    let (message, problem) = if let Some(env) = local {
+        match &env.status {
+            ConnectionStatus::Connected { current: true } => {
+                ("Connected. Your projects, chats and models are ready.".to_owned(), false)
+            }
+            ConnectionStatus::NeedsPairing { reason }
+            | ConnectionStatus::Blocked { reason }
+            | ConnectionStatus::Reconnecting { reason, .. } => (reason.clone(), true),
+            _ => ("Connecting to T3 Code…".into(), false),
+        }
+    } else {
+        match &status {
+            SetupStatus::Idle => ("Find T3 Code on this computer and connect automatically.".into(), false),
+            SetupStatus::Working(message) => (message.clone(), false),
+            SetupStatus::Missing => ("T3 Code isn't installed. Download it here and Bukno will start it and connect for you. No terminal or extra setup needed.".into(), false),
+            SetupStatus::Ready { .. } => ("Connecting to T3 Code…".into(), false),
+            SetupStatus::Failed(message) => (message.clone(), true),
+        }
+    };
+    let galley = ui.painter().layout_job(theme.job(
+        &message,
+        &theme.text.t_ui,
+        if problem { c.negative } else { c.text_secondary },
+        width - 32.0,
+    ));
+    let has_action = !status.busy();
+    let height = 52.0 + galley.size().y + if has_action { 64.0 } else { 20.0 };
+    let card = Rect::from_min_size(at, vec2(width, height));
+    ui.painter().rect_filled(card, theme.radius.radius_lg, c.surface_composer);
+    ui.painter().text(
+        pos2(at.x + 16.0, at.y + 24.0),
+        Align2::LEFT_CENTER,
+        "T3 Code",
+        theme.font(&theme.text.t_ui_strong),
+        c.text_primary,
+    );
+    let y = at.y + 48.0;
+    let h = galley.size().y;
+    ui.painter().galley(pos2(at.x + 16.0, y), galley, c.text_secondary);
+    if has_action {
+        let download = status == SetupStatus::Missing;
+        let (action, _) = button(
+            ui,
+            theme,
+            Id::new("setup-local-t3"),
+            pos2(at.x + 16.0, y + h + 16.0),
+            if download { "Download T3 Code" } else { "Check again" },
+            download,
+        );
+        if action.clicked() {
+            t3.setup_local(download);
+        }
+    }
+    card.bottom()
+}
+
+fn show_direct(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
     let theme = app.theme.clone();
     let c = &theme.color;
     let left = full.center().x - COLUMN / 2.0;

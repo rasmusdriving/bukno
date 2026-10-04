@@ -9,6 +9,7 @@
 #
 # See e2e/scenarios/t3-read-only.md.
 set -eu
+export BUKNO_T3_AUTO_SETUP=0
 
 : "${BUKNO_EVIDENCE_DIR:?set BUKNO_EVIDENCE_DIR}"
 : "${BUKNO_T3_ADDRESS:?set BUKNO_T3_ADDRESS}"

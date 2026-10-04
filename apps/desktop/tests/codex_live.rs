@@ -93,7 +93,7 @@ fn launch(run: &Run) -> App {
         .with_max_steps(1_000_000)
         .with_step_dt(STEP_DT)
         .wgpu()
-        .build_eframe(move |cc| BuknoApp::real(&cc.egui_ctx, paths, store));
+        .build_eframe(move |cc| BuknoApp::direct(&cc.egui_ctx, paths, store));
     App { harness, _lock: lock }
 }
 
