@@ -6,8 +6,11 @@ then pairs through `t3 pair`. The short-lived link stays in memory. The access
 sign-in stays in the system keychain with the existing read/operate scopes.
 A saved connection is reused, including after the server changes its port.
 Existing remote connections remain available.
-If the OS proves that a recorded PID was reused after the record was written,
-Bukno ignores the stale record. An uncertain live record still blocks startup.
+A verified endpoint is reused regardless of file timestamps. On Linux, Bukno
+remembers the boot ID and process start ticks after verifying a server, so a
+clock correction cannot make that process appear stale. A failed endpoint is
+ignored only with proof that the recorded PID belongs to a different process.
+A missing process observation or uncertain live record still blocks startup.
 
 If the desktop app is installed but closed, Bukno opens it normally and waits
 for its server. It uses the CLI bundled with that installation for pairing.
@@ -29,8 +32,11 @@ limit. Extraction runs off the connection worker. Cancelled extraction retains
 the setup lock until its staging has been cleaned. A later download removes
 abandoned staging left by a forced quit.
 A usable installation is kept intact. If its binary is missing, the incomplete
-folder is preserved under `.incomplete-*` while the verified replacement is
-installed. There is no Node, npm, shell script,
+folder is moved under `.incomplete-*` for rollback while the verified replacement
+is installed. After successful replacement, owned repair backups for that version
+are removed under the setup lock. Failed downloads retain those backups, and
+folders outside the installer's UUID naming scheme are left alone.
+There is no Node, npm, shell script,
 administrator prompt or global PATH change in this installation flow.
 
 The default launch detects CLI paths, common per-user install locations and
@@ -60,6 +66,7 @@ Under Bukno's application-data folder:
 
 - `t3-runtime/<version>/`: the verified, self-contained release.
 - `t3-server/`: the separately managed T3 data and runtime record.
+- `t3-server/runtime-owner-*.json`: Linux process observations for safe PID reuse checks.
 - `t3-environments.json`: server identity/address, scopes and sign-in expiry.
 - `t3-client-state.json`: drafts and the selected T3 project/chat.
 
@@ -87,8 +94,12 @@ stops its disposable managed server and cleans its successful scratch run.
 The same check also exercises the real direct-project sidebar action beside a
 connected T3, project-ID completion, a bounded missing acknowledgement, removal
 of a remembered project, a reused PID, desktop-install precedence and repair of
-an incomplete binary with abandoned staging. These checks passed on Ubuntu;
-their evidence is under `review-fixes/` in the folder below. The delayed
+an incomplete binary with abandoned staging. It also backdates only a disposable
+live server's record to verify process and sign-in reuse after a clock mismatch,
+checks that an unavailable live endpoint blocks another launch, and confirms
+successful repair backup cleanup while failed downloads preserve rollback files.
+These checks passed on Ubuntu; evidence for the final review fixes is under
+`final-review-fixes/` in the folder below. The delayed
 acknowledgement check sets the elapsed wait directly in the native harness.
 
 Closed desktop startup can be checked on Ubuntu without interrupting the

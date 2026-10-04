@@ -37,6 +37,17 @@ fn automatic_t3_onboarding() {
     std::fs::create_dir_all(&run.work).unwrap();
     std::fs::create_dir_all(run.evidence.join("screens")).unwrap();
     let abandoned = run.state.join("t3-runtime/.download-c1c1938f-30dd-458b-b82b-1d6a28d8b7bc");
+    let old_backup = run.state.join(format!(
+        "t3-runtime/.incomplete-{}-b54a7080-5530-48dc-b078-fc33f24bd779",
+        bukno_t3_client::pinned::SERVER_VERSION,
+    ));
+    let unrelated = run.state.join("t3-runtime/.incomplete-keep");
+    if mode == "repair" || mode == "offline" {
+        std::fs::create_dir_all(&old_backup).unwrap();
+        std::fs::write(old_backup.join("rollback.txt"), "previous repair backup").unwrap();
+        std::fs::create_dir_all(&unrelated).unwrap();
+        std::fs::write(unrelated.join("keep.txt"), "unrelated files").unwrap();
+    }
     if mode == "repair" {
         let install = run.state.join("t3-runtime").join(bukno_t3_client::pinned::SERVER_VERSION);
         std::fs::create_dir_all(&install).unwrap();
@@ -107,11 +118,16 @@ fn automatic_t3_onboarding() {
             a.t3.as_ref().is_some_and(|t| matches!(t.view.local_setup, SetupStatus::Failed(_)))
         });
         let staging = run.state.join("t3-runtime");
-        let clean = !staging.exists() || std::fs::read_dir(&staging).unwrap().next().is_none();
+        let clean = !staging.exists()
+            || !std::fs::read_dir(&staging)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(".download-"));
         run.check(
-            "offline download reports an error and removes its partial installation",
-            failed && clean && app.app().t3.as_ref().unwrap().view.environments.is_empty(),
-            json!({"error":format!("{:?}",app.app().t3.as_ref().unwrap().view.local_setup),"staging_removed":clean}),
+            "offline download removes staging while retaining rollback backups and unrelated files",
+            failed && clean && old_backup.join("rollback.txt").is_file() && unrelated.join("keep.txt").is_file()
+                && app.app().t3.as_ref().unwrap().view.environments.is_empty(),
+            json!({"error":format!("{:?}",app.app().t3.as_ref().unwrap().view.local_setup),"staging_removed":clean,"rollback_retained":old_backup.is_dir(),"unrelated_retained":unrelated.is_dir()}),
         );
         app.shot(&mut run, "offline-download");
         drop(app);
@@ -198,14 +214,16 @@ fn automatic_t3_onboarding() {
     app.app().show_setup = false;
     if mode == "repair" {
         let parent = run.state.join("t3-runtime");
-        let preserved = std::fs::read_dir(&parent).unwrap().flatten().any(|entry| {
-            entry.file_name().to_string_lossy().starts_with(".incomplete-")
-                && entry.path().join("preserved.txt").is_file()
-        });
+        let prefix = format!(".incomplete-{}-", bukno_t3_client::pinned::SERVER_VERSION);
+        let backups = std::fs::read_dir(&parent)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count();
         run.check(
-            "repair preserves the incomplete install and removes abandoned staging",
-            preserved && !abandoned.exists(),
-            json!({"preserved":preserved,"staging_removed":!abandoned.exists()}),
+            "successful repair removes obsolete backups and staging, preserving unrelated files",
+            backups == 0 && !abandoned.exists() && unrelated.join("keep.txt").is_file(),
+            json!({"backup_count":backups,"staging_removed":!abandoned.exists(),"unrelated_retained":unrelated.is_dir()}),
         );
     }
     let managed_record = run.state.join("t3-server/userdata/server-runtime.json");
@@ -214,6 +232,15 @@ fn automatic_t3_onboarding() {
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .and_then(|v| v["pid"].as_u64());
     drop(app);
+    if downloaded {
+        // Reproduce the review's clock mismatch without changing this machine's
+        // clock or touching the main T3 runtime record.
+        assert!(managed_record.starts_with(&root));
+        std::fs::File::open(&managed_record)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1)))
+            .unwrap();
+    }
     let mut app = launch(&run);
     let resumed = app.wait(Duration::from_secs(60), |a| a.t3.as_ref().and_then(|t| t.ready_environment()).is_some());
     let resumed_env = app.environment().unwrap();
@@ -221,12 +248,46 @@ fn automatic_t3_onboarding() {
     if downloaded {
         let record: serde_json::Value = serde_json::from_slice(&std::fs::read(&managed_record).unwrap()).unwrap();
         run.check(
-            "Bukno restart reuses the existing server process",
+            "Bukno restart reuses the live server despite a backdated runtime record",
             record["pid"].as_u64() == pid_before,
             json!({"pid":pid_before,"same_pid":record["pid"].as_u64() == pid_before}),
         );
         let pid = record["pid"].as_u64().unwrap();
         drop(app);
+        let config = bukno_t3_client::local::LocalConfig::for_app(&run.state);
+        // Pause only our disposable server. The unchanged runtime record now
+        // points to a real listener that cannot answer until it is resumed.
+        assert!(managed_record.starts_with(&root));
+        let resume = ResumeServer(pid);
+        assert!(std::process::Command::new("kill").args(["-STOP", &pid.to_string()]).status().unwrap().success());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let blocked = rt.block_on(bukno_t3_client::local::prepare(&config, false, &|_| {})).is_err();
+        let still_recorded: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&managed_record).unwrap()).unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            let mut removed = 0;
+            for entry in std::fs::read_dir(&config.managed_home).unwrap().flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with("runtime-owner-") {
+                    assert!(entry.path().starts_with(&root));
+                    std::fs::remove_file(entry.path()).unwrap();
+                    removed += 1;
+                }
+            }
+            let blocked_without_proof = rt.block_on(bukno_t3_client::local::prepare(&config, false, &|_| {})).is_err();
+            run.check(
+                "a missing process observation keeps an unavailable live runtime blocking startup",
+                removed > 0 && blocked_without_proof,
+                json!({"observations_removed":removed,"startup_blocked":blocked_without_proof}),
+            );
+        }
+        drop(resume);
+        run.check(
+            "an unavailable live endpoint and clock mismatch do not permit another writer",
+            blocked && still_recorded["pid"].as_u64() == Some(pid),
+            json!({"startup_blocked":blocked,"same_pid":still_recorded["pid"].as_u64() == Some(pid)}),
+        );
         // This is the disposable managed server, never the user's attached T3.
         assert!(managed_record.starts_with(&root));
         std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().unwrap();
@@ -321,6 +382,14 @@ fn automatic_t3_onboarding() {
     }
     run.write();
     assert!(run.checks.iter().all(|c| c["status"] == "pass"), "see result.json");
+}
+
+struct ResumeServer(u64);
+
+impl Drop for ResumeServer {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill").args(["-CONT", &self.0.to_string()]).status();
+    }
 }
 
 /// Restore the user's sign-in even if an attached assertion fails.

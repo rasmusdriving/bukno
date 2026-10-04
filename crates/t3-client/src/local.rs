@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use fs2::FileExt;
 use serde::Deserialize;
@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use url::Url;
 
+use crate::error::T3Error;
 use crate::http::Http;
 use crate::model::Descriptor;
 use crate::pairing::{normalize_address, parse_pairing};
@@ -157,6 +158,7 @@ pub fn workspace_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_owned())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn process_started_after_record(pid: u32, modified: std::time::SystemTime) -> bool {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let pid = Pid::from_u32(pid);
@@ -167,9 +169,75 @@ fn process_started_after_record(pid: u32, modified: std::time::SystemTime) -> bo
         ProcessRefreshKind::nothing().without_tasks(),
     );
     let Some(process) = system.process(pid) else { return false };
-    // Unknown start times stay conservative. Allow a second for OS/file precision.
-    let written = modified.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-    written.is_some_and(|written| process.start_time() > written.saturating_add(1))
+    // Unknown start times stay conservative. Allow for OS/file precision.
+    let written = modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs());
+    written.is_some_and(|written| process.start_time() > written.saturating_add(300))
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_process_reused(pid: u32, path: &Path, proof_dir: &Path, verified: bool, record_hash: String) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    #[derive(Deserialize, serde::Serialize)]
+    struct Owner {
+        pid: u32,
+        boot: String,
+        ticks: u64,
+        record_hash: String,
+    }
+
+    // Bukno itself cannot be the T3 backend. This is also proof for a record
+    // whose PID was reused before Bukno ever observed that server.
+    if !verified && stale_frontend_pid(pid, path) {
+        return true;
+    }
+    let Some(owner) = (|| {
+        let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // The process name can contain spaces and parentheses. Field 22 is
+        // the start tick count since boot, independent of wall-clock changes.
+        let ticks = stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()?;
+        Some(Owner { pid, boot: boot.trim().to_owned(), ticks, record_hash })
+    })() else {
+        return false;
+    };
+    let proof = proof_dir.join(format!("runtime-owner-{:x}.json", Sha256::digest(path.as_os_str().as_bytes())));
+    if verified {
+        // Keep observations in Bukno's folder, without changing T3's files.
+        // A missing/unreadable observation stays conservative on the next run.
+        if let Ok(bytes) = serde_json::to_vec(&owner) {
+            // An interrupted write becomes unreadable and therefore blocks
+            // replacement, without leaving another temporary file behind.
+            let _ = std::fs::write(proof, bytes);
+        }
+        false
+    } else {
+        std::fs::read(proof).ok().and_then(|bytes| serde_json::from_slice::<Owner>(&bytes).ok()).is_some_and(
+            |previous| {
+                previous.pid == owner.pid
+                    && previous.record_hash == owner.record_hash
+                    && (previous.boot != owner.boot || previous.ticks != owner.ticks)
+            },
+        )
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn runtime_process_reused(pid: u32, path: &Path, _proof_dir: &Path, verified: bool, _record_hash: String) -> bool {
+    !verified
+        && (stale_frontend_pid(pid, path)
+            || std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .is_ok_and(|modified| process_started_after_record(pid, modified)))
+}
+
+fn stale_frontend_pid(pid: u32, path: &Path) -> bool {
+    pid == std::process::id()
+        && std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(300))
 }
 
 fn process_alive(pid: u32) -> bool {
@@ -207,7 +275,7 @@ fn process_alive(pid: u32) -> bool {
 
 /// None means there is no live runtime. A live record that fails identity
 /// verification is a block, never permission to start another writer.
-async fn discover(home: &Path) -> Result<Option<(Url, Descriptor)>, String> {
+async fn discover(home: &Path, proof_dir: &Path) -> Result<Option<(Url, Descriptor)>, String> {
     for variant in ["userdata", "dev"] {
         let path = home.join(variant).join("server-runtime.json");
         let bytes = match std::fs::read(&path) {
@@ -230,14 +298,6 @@ async fn discover(home: &Path) -> Result<Option<(Url, Descriptor)>, String> {
         if !process_alive(record.pid) {
             continue;
         }
-        if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
-            let pid = record.pid;
-            let reused =
-                tokio::task::spawn_blocking(move || process_started_after_record(pid, modified)).await.unwrap_or(false);
-            if reused {
-                continue;
-            }
-        }
         let base = normalize_address(&record.origin).map_err(|e| e.user_message())?;
         // Permit loopback and addresses actually assigned to this computer.
         // Binding an ephemeral socket proves locality without network scanning.
@@ -253,8 +313,24 @@ async fn discover(home: &Path) -> Result<Option<(Url, Descriptor)>, String> {
                     .into(),
             );
         }
-        let descriptor = Http::new().descriptor(&base).await.map_err(|e| e.user_message())?;
-        return Ok(Some((base, descriptor)));
+        // A verified endpoint wins over timestamps. On Linux, epoch-based
+        // process start times can move after NTP or resume, even when the
+        // process has not changed. Only a clock-independent owner mismatch
+        // can permit replacement of a live but unresponsive managed server.
+        let descriptor = Http::new().descriptor(&base).await;
+        let verified = descriptor.is_ok();
+        let proof_dir = proof_dir.to_owned();
+        let pid = record.pid;
+        let record_hash = format!("{:x}", Sha256::digest(&bytes));
+        let reused =
+            tokio::task::spawn_blocking(move || runtime_process_reused(pid, &path, &proof_dir, verified, record_hash))
+                .await
+                .unwrap_or(false);
+        match descriptor {
+            Ok(descriptor) => return Ok(Some((base, descriptor))),
+            Err(T3Error::Unreachable { .. }) if reused => continue,
+            Err(error) => return Err(error.user_message()),
+        }
     }
     Ok(None)
 }
@@ -303,9 +379,11 @@ pub async fn prepare(
     };
     // Probe even when the CLI is missing: do not launch a replacement for a
     // live server whose install has moved. The download supplies just the CLI.
-    let existing = match discover(&config.t3_home).await? {
+    let existing = match discover(&config.t3_home, &config.managed_home).await? {
         Some(found) => Some((config.t3_home.clone(), found)),
-        None => discover(&config.managed_home).await?.map(|found| (config.managed_home.clone(), found)),
+        None => discover(&config.managed_home, &config.managed_home)
+            .await?
+            .map(|found| (config.managed_home.clone(), found)),
     };
     if launcher.is_none() && install {
         launcher = Some(download(config, progress, lock.clone()).await?);
@@ -327,7 +405,7 @@ pub async fn prepare(
             .stderr(Stdio::null());
         let mut child =
             command.spawn().map_err(|_| "T3 Code could not open. Try again or use advanced connection.".to_owned())?;
-        let ready = wait_for_server(&config.t3_home, &mut child, true).await;
+        let ready = wait_for_server(&config.t3_home, &config.managed_home, &mut child, true).await;
         tokio::spawn(async move {
             let _ = child.wait().await;
         });
@@ -350,7 +428,7 @@ pub async fn prepare(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(|_| "T3 could not start. Try downloading it again.".to_owned())?;
-    match wait_for_server(&config.managed_home, &mut child, false).await {
+    match wait_for_server(&config.managed_home, &config.managed_home, &mut child, false).await {
         Ok((base, descriptor)) => {
             // T3 persists independently of the frontend. Keep a reaper while
             // Bukno lives; closing the frontend never stops agent work.
@@ -369,6 +447,7 @@ pub async fn prepare(
 
 async fn wait_for_server(
     home: &Path,
+    proof_dir: &Path,
     child: &mut tokio::process::Child,
     allow_launcher_exit: bool,
 ) -> Result<(Url, Descriptor), String> {
@@ -381,7 +460,7 @@ async fn wait_for_server(
                 return Err("T3 stopped during startup. Try again or use advanced connection.".into());
             }
             // T3 can publish its record just before opening the HTTP listener.
-            match discover(home).await {
+            match discover(home, proof_dir).await {
                 Ok(Some(found)) => return Ok(found),
                 Err(error) => last_error = Some(error),
                 Ok(None) => {}
@@ -488,6 +567,17 @@ impl Drop for StagingCleanup {
     }
 }
 
+fn remove_owned_install_dirs(parent: &Path, prefix: &str) {
+    for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let owned =
+            name.to_str().and_then(|n| n.strip_prefix(prefix)).is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+        if owned && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 async fn download(
     config: &LocalConfig,
     progress: &(dyn Fn(&str) + Send + Sync),
@@ -502,16 +592,7 @@ async fn download(
     // The setup lock is held. Only remove this installer's abandoned UUID staging.
     tokio::task::spawn_blocking(move || {
         let _lock = sweep_lock;
-        for entry in std::fs::read_dir(sweep).into_iter().flatten().flatten() {
-            let name = entry.file_name();
-            let owned = name
-                .to_str()
-                .and_then(|n| n.strip_prefix(".download-"))
-                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
-            if owned && entry.file_type().is_ok_and(|t| t.is_dir()) {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
+        remove_owned_install_dirs(&sweep, ".download-");
     })
     .await
     .map_err(|_| "Bukno could not prepare the download folder.".to_owned())?;
@@ -565,6 +646,18 @@ async fn download(
             }
             return Err("Bukno could not finish installing T3. Check free space and try again.".into());
         }
+        // The verified replacement is now in place. Rollback backups for this
+        // version are no longer needed, including leftovers from an older repair.
+        // Never prune them before the replacement succeeds.
+        let parent = parent.to_owned();
+        let lock = cleanup.lock.clone();
+        tokio::task::spawn_blocking(move || {
+            let _lock = lock;
+            let prefix = format!(".incomplete-{}-", crate::pinned::SERVER_VERSION);
+            remove_owned_install_dirs(&parent, &prefix);
+        })
+        .await
+        .map_err(|_| "T3 was installed, but its old files could not be cleaned up. Try again.".to_owned())?;
         Ok::<_, String>(())
     }
     .await;

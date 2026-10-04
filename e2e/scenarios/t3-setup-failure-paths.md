@@ -23,9 +23,12 @@ Failure paths recorded before implementing the local adapter, 4 October 2026.
 | Remembered T3 project is removed or its environment forgotten | Clear the selection and offer a usable new-chat screen |
 | T3 normalizes a chosen folder, or its project snapshot is delayed | Register a normal OS path, match the returned project ID and bound the wait with a retry message |
 | Download progresses for more than five minutes | Keep downloading while bytes arrive; time out stalled reads rather than the entire request |
-| A stopped managed server's PID is reused after reboot | Ignore a runtime record only when the OS proves that process started after the record; block uncertain live records |
+| A stopped managed server's PID is reused after reboot | Verify the endpoint first; ignore a failed record only with proof of a different process, and block uncertain live records |
+| The clock changes while managed T3 is running | Reuse a verified live endpoint regardless of file timestamps; an unavailable endpoint must not allow a second writer |
+| Process identity cannot be read or was not previously saved | Keep the live record blocking startup when its endpoint cannot be verified |
 | T3 desktop is installed after Bukno created its own backend | Restart the existing managed database instead of silently choosing an empty desktop environment |
-| Managed binary is missing, or a download was killed | Preserve the incomplete installation while replacing it; remove abandoned staging under the setup lock |
+| Managed binary is missing, or a download was killed | Keep the incomplete installation for rollback until replacement succeeds; remove abandoned staging and successful repair backups under the setup lock |
+| Download or replacement fails during repair | Retain the old installation and any repair backups; do not prune them before a successful replacement |
 | Extraction runs while another environment is connected | Keep extraction and large file operations off the connection worker |
 
 Live acceptance uses the real native onboarding and real T3 CLI/server. Retain
