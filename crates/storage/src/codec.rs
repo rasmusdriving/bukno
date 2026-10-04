@@ -125,7 +125,7 @@ pub fn decision_kind(kind: &DecisionKind) -> String {
 }
 
 fn question(q: &Question) -> Value {
-    json!({"id": q.id, "header": q.header, "text": q.text, "options": q.options, "other": q.other})
+    json!({"id": q.id, "header": q.header, "text": q.text, "options": q.options, "other": q.other, "multi": q.multi})
 }
 
 pub fn allowed(kind: &DecisionKind) -> &'static str {

@@ -16,7 +16,7 @@ use egui::{Key, KeyboardShortcut, Modifiers, Ui};
 
 use crate::components::composer::{ComposerState, composer_id};
 use crate::evidence::Evidence;
-use crate::sources::{T3ChatRef, T3Source, draft_key};
+use crate::sources::{PendingSend, T3ChatRef, T3Source, draft_key};
 use crate::theme::Theme;
 use crate::transcript::TranscriptView;
 use crate::transcript::document::Document;
@@ -74,19 +74,6 @@ pub struct RemoteNew {
     pub project: String,
     pub model: Option<ModelChoice>,
     pub runtime_mode: String,
-}
-
-/// A command sent from the T3 composer, waiting for T3's answer. Only the
-/// draft revision that was sent is cleared when T3 accepts it.
-#[derive(Clone, Debug)]
-pub struct RemotePending {
-    pub environment: String,
-    pub command_id: String,
-    pub revision: u64,
-    pub draft: String,
-    /// The client has reported this command at least once. Until then its
-    /// absence only means the client has not picked it up yet.
-    pub seen: bool,
 }
 
 /// A message handed to the coordinator and not yet accepted or rejected.
@@ -188,8 +175,9 @@ pub struct BuknoApp {
     /// The T3 chat shown when the view is [`View::Remote`].
     pub remote: Option<T3ChatRef>,
     pub remote_new: Option<RemoteNew>,
-    /// Messages and new chats sent from T3 composers, until settled.
-    pub remote_pending: Vec<RemotePending>,
+    /// Pending T3 sends the client has reported at least once, by command ID.
+    /// Until then a send's absence only means the client has not picked it up.
+    pub remote_seen: std::collections::HashSet<String>,
     /// Commands for the open T3 chat's cards, so a card shows "Sending…".
     pub remote_answers: HashMap<String, String>,
     /// Show the T3 servers screen (Add environment and status).
@@ -289,7 +277,7 @@ impl BuknoApp {
             t3: None,
             remote: None,
             remote_new: None,
-            remote_pending: Vec::new(),
+            remote_seen: std::collections::HashSet::new(),
             remote_answers: HashMap::new(),
             show_environments: false,
             t3_open_projects: HashMap::new(),
@@ -578,15 +566,13 @@ impl BuknoApp {
         if !env.ready_to_send() {
             return Some("Not connected to T3. Your draft is kept.");
         }
-        // Only the composer a pending message was sent from waits for it.
-        for pending in &self.remote_pending {
-            let Some(entry) = t3.command(&pending.environment, &pending.command_id) else { continue };
-            if !self.composer_of(&pending.environment, entry) {
-                continue;
-            }
-            match entry.state {
-                OutboxState::Sending => return Some("Sending…"),
-                OutboxState::Unconfirmed => {
+        // Only the composer a pending message was sent from waits for it,
+        // from the moment it is sent, before the client has even reported it.
+        let key = self.remote_draft_key();
+        for pending in t3.pending_sends().iter().filter(|p| Some(&p.key) == key.as_ref()) {
+            match t3.command(&pending.environment, &pending.request.command_id).map(|e| &e.state) {
+                None | Some(OutboxState::Sending) => return Some("Sending…"),
+                Some(OutboxState::Unconfirmed) => {
                     return Some("The last message is not confirmed yet. Your draft is kept.");
                 }
                 _ => {}
@@ -601,26 +587,13 @@ impl BuknoApp {
         None
     }
 
-    /// Whether the T3 composer on screen is the one this command was sent from.
-    fn composer_of(&self, environment: &str, entry: &bukno_t3_client::hub::OutboxEntry) -> bool {
-        self.remote_environment() == Some(environment)
-            && match &entry.request.outgoing {
-                Outgoing::Launch { project_id, .. } => {
-                    self.view == View::RemoteNew && self.remote_new.as_ref().is_some_and(|n| &n.project == project_id)
-                }
-                _ => {
-                    self.view == View::Remote
-                        && self.remote.as_ref().is_some_and(|c| c.thread == entry.request.thread_id())
-                }
-            }
-    }
-
     /// Send the T3 composer's text: a new chat, or a message in the open chat.
     pub fn remote_submit(&mut self, delivery: Delivery) {
         let body = self.composer.text.trim().to_owned();
         if body.is_empty() || self.remote_send_blocked().is_some() {
             return;
         }
+        let Some(key) = self.remote_draft_key() else { return };
         let Some(t3) = self.t3.as_ref() else { return };
         self.notice = None;
         let message_id = bukno_t3_client::command::new_id();
@@ -649,14 +622,9 @@ impl BuknoApp {
             }
             _ => return,
         };
-        let command_id = t3.dispatch(&environment, outgoing);
-        self.remote_pending.push(RemotePending {
-            environment,
-            command_id,
-            revision: self.composer.revision,
-            draft: body,
-            seen: false,
-        });
+        if let Some(t3) = self.t3.as_mut() {
+            t3.send_tracked(&environment, &key, &body, outgoing);
+        }
     }
 
     /// Stop the open T3 chat's running turn. Queued messages wait.
@@ -694,30 +662,32 @@ impl BuknoApp {
         {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(DRAFT_DEBOUNCE));
         }
-        for pending in self.remote_pending.clone() {
-            self.settle_pending(&pending, now);
+        let pending: Vec<PendingSend> = self.t3.as_ref().map(|t| t.pending_sends().to_vec()).unwrap_or_default();
+        for send in pending {
+            self.settle_pending(&send, now);
         }
     }
 
     /// Clear the draft of a send T3 accepted, or show why it refused.
-    fn settle_pending(&mut self, pending: &RemotePending, now: f64) {
-        let Some(entry) = self.t3.as_ref().and_then(|t| t.command(&pending.environment, &pending.command_id)).cloned()
-        else {
-            // Gone after it was seen: dismissed, so nothing is left to wait for.
-            if pending.seen {
-                self.remote_pending.retain(|p| p.command_id != pending.command_id);
+    fn settle_pending(&mut self, pending: &PendingSend, now: f64) {
+        let id = pending.request.command_id.clone();
+        let Some(t3) = self.t3.as_mut() else { return };
+        let known = t3.environment(&pending.environment).is_some();
+        let Some(entry) = t3.command(&pending.environment, &id).cloned() else {
+            // Gone after it was seen (dismissed), or its server was removed.
+            if self.remote_seen.contains(&id) || !known {
+                t3.untrack(&id);
+                self.remote_seen.remove(&id);
             }
             return;
         };
-        if let Some(p) = self.remote_pending.iter_mut().find(|p| p.command_id == pending.command_id) {
-            p.seen = true;
-        }
+        self.remote_seen.insert(id.clone());
         if matches!(entry.state, OutboxState::Sending | OutboxState::Unconfirmed) {
             return;
         }
-        self.remote_pending.retain(|p| p.command_id != pending.command_id);
-        let here = self.composer_of(&pending.environment, &entry);
-        let launched = matches!(entry.request.outgoing, Outgoing::Launch { .. });
+        t3.untrack(&id);
+        self.remote_seen.remove(&id);
+        let here = self.remote_draft_key().as_ref() == Some(&pending.key);
         match entry.state {
             OutboxState::Rejected(reason) => {
                 // Nothing ran; the draft is still there to edit.
@@ -726,26 +696,22 @@ impl BuknoApp {
                     self.extra.notice_problem = true;
                 }
                 if let Some(t3) = self.t3.as_ref() {
-                    t3.dismiss_command(&pending.environment, &pending.command_id);
+                    t3.dismiss_command(&pending.environment, &id);
                 }
             }
             OutboxState::Accepted { thread_id, .. } => {
-                // Clear exactly what was sent; anything typed since stays.
-                let unchanged =
-                    self.composer.revision == pending.revision || self.composer.text.trim() == pending.draft;
-                if here && unchanged {
-                    self.composer.text.clear();
-                    self.composer.revision += 1;
-                } else if !here && let Some(t3) = self.t3.as_mut() {
-                    let key = match &entry.request.outgoing {
-                        Outgoing::Launch { project_id, .. } => draft_key(&pending.environment, None, Some(project_id)),
-                        _ => draft_key(&pending.environment, Some(entry.request.thread_id()), None),
-                    };
-                    if t3.draft(&key).trim() == pending.draft {
-                        t3.set_draft(&key, "", now);
+                // Clear exactly the text that was sent; anything else typed stays.
+                if here {
+                    if self.composer.text.trim() == pending.draft {
+                        self.composer.text.clear();
+                        self.composer.revision += 1;
                     }
+                } else if let Some(t3) = self.t3.as_mut()
+                    && t3.draft(&pending.key).trim() == pending.draft
+                {
+                    t3.set_draft(&pending.key, "", now);
                 }
-                if launched
+                if matches!(entry.request.outgoing, Outgoing::Launch { .. })
                     && here
                     && let Some(thread) = thread_id
                 {
@@ -1149,6 +1115,8 @@ impl BuknoApp {
             return;
         }
         self.flush_draft();
+        // A T3 draft is written now, not after the typing pause.
+        self.keep_remote_draft();
         if self.work_active() {
             self.quit = QuitFlow::Asking;
         } else {
@@ -1159,6 +1127,7 @@ impl BuknoApp {
 
     pub fn confirm_quit(&mut self) {
         self.flush_draft();
+        self.keep_remote_draft();
         self.quit = QuitFlow::Closing;
         self.backend.send(UiCommand::Quit { stop: true });
     }

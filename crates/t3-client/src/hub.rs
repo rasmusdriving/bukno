@@ -150,6 +150,8 @@ pub struct HubView {
 
 enum EnvCommand {
     Dispatch(CommandRequest),
+    /// A command from before a restart whose outcome is unknown.
+    Adopt(CommandRequest),
     Retry(String),
     DismissCommand(String),
     OpenThread(String),
@@ -278,6 +280,13 @@ impl Hub {
     /// Send a command. Its progress shows in [`EnvironmentView::outbox`].
     pub fn dispatch(&self, environment_id: &str, request: CommandRequest) {
         self.send(environment_id, EnvCommand::Dispatch(request));
+    }
+
+    /// Take back a command saved before Bukno quit, as unconfirmed. It is
+    /// settled from the chat once caught up, or offered as Send again; it is
+    /// never sent by itself.
+    pub fn adopt(&self, environment_id: &str, request: CommandRequest) {
+        self.send(environment_id, EnvCommand::Adopt(request));
     }
 
     /// Send an unconfirmed command again, with the same command ID.
@@ -504,7 +513,13 @@ impl EnvState {
             let request = &entry.request;
             let here = thread.filter(|t| t.thread_id == request.thread_id());
             let done = match &request.outgoing {
-                Outgoing::Launch { thread_id, .. } => shell_current && self.shell.threads.contains_key(thread_id),
+                // T3 creates the chat and sends its first message in two
+                // steps, so the chat alone does not prove the message landed.
+                // Any user message in a chat Bukno just created is that one.
+                Outgoing::Launch { thread_id, .. } => {
+                    shell_current
+                        && self.shell.threads.get(thread_id).is_some_and(|t| t.latest_user_message_at.is_some())
+                }
                 Outgoing::Send { message_id, .. } => here.is_some_and(|t| t.has_message(message_id)),
                 Outgoing::Approve { request_id, .. }
                 | Outgoing::Answer { request_id, .. }
@@ -620,6 +635,12 @@ async fn wait(
                 Some(EnvCommand::Dispatch(request)) => {
                     state.record(request, OutboxState::Rejected("Not connected to T3, so nothing was sent.".into()));
                     shared.publish(state.generation, state.view());
+                }
+                Some(EnvCommand::Adopt(request)) => {
+                    if state.entry(&request.command_id).is_none() {
+                        state.record(request, OutboxState::Unconfirmed);
+                        shared.publish(state.generation, state.view());
+                    }
                 }
                 // An unconfirmed command waits for the connection; Retry needs one.
                 Some(EnvCommand::Retry(_)) => {}
@@ -1135,6 +1156,13 @@ async fn serve(
                     // A second press of the same action is one command.
                     if state.entry(&request.command_id).is_none() {
                         send_command(shared, state, session, reply_tx, request);
+                        shared.publish(state.generation, state.view());
+                    }
+                }
+                Some(EnvCommand::Adopt(request)) => {
+                    if state.entry(&request.command_id).is_none() {
+                        state.record(request, OutboxState::Unconfirmed);
+                        state.reconcile();
                         shared.publish(state.generation, state.view());
                     }
                 }

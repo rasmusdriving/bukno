@@ -12,12 +12,13 @@
 //! the same [`CommandRequest`] again after an unconfirmed reply cannot run it
 //! twice.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::rpc::Method;
 
 /// How a message is delivered while the chat may be working.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Delivery {
     /// Start a turn, or let T3 choose when one is running (its default).
     Auto,
@@ -28,13 +29,15 @@ pub enum Delivery {
 }
 
 /// A model to run a new chat with: the provider instance and model slug.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelChoice {
     pub instance_id: String,
     pub model: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Serializable so an unconfirmed send can be saved and checked again after
+/// Bukno restarts, with its original IDs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outgoing {
     Send {
         thread_id: String,
@@ -60,7 +63,7 @@ pub enum Outgoing {
     Approve {
         thread_id: String,
         request_id: String,
-        decision: &'static str,
+        decision: String,
     },
     /// Answers by question ID: a string, or a list for multi-select.
     Answer {
@@ -92,7 +95,7 @@ pub enum Outgoing {
 }
 
 /// One user action and the command ID that stays with it through retries.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandRequest {
     pub command_id: String,
     pub outgoing: Outgoing,

@@ -46,6 +46,7 @@ BUKNO_T3_ADDRESS=http://127.0.0.1:3773 \
 | Relay passes the request but drops replies, then cuts | The message is found in the chat and shown as sent, once (O3) |
 | Relay holds the request, then cuts | "Not confirmed" with Send again; sent once afterwards (O3) |
 | Relay refuses connections | Send is unavailable, the draft stays, nothing reaches T3 (O5) |
+| Relay drops the reply, Bukno quits, relaunch | The saved send is checked with its IDs: shown as sent, draft cleared, once in T3 (O3, O15) |
 | Every sent text counted in T3 | Each exactly once (O19) |
 | `notes.md` compared with its start | The uncommitted change is untouched (O18) |
 | Log, state folder and evidence searched | No token, link or chat text (O20) |

@@ -794,6 +794,7 @@ impl Supervisor {
                                 .filter_map(|o| str_at(o, "label").map(str::to_owned))
                                 .collect(),
                             other: q.get("isOther").and_then(Value::as_bool).unwrap_or(false),
+                            multi: false,
                         })
                     })
                     .collect();

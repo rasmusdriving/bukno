@@ -79,7 +79,7 @@ fn docks(app: &BuknoApp) -> Vec<Dock> {
     }
 
     for entry in env.outbox.iter().filter(|e| e.request.thread_id() == chat.thread) {
-        let mine = app.remote_pending.iter().any(|p| p.command_id == entry.request.command_id);
+        let mine = t3.pending_sends().iter().any(|p| p.request.command_id == entry.request.command_id);
         match &entry.state {
             OutboxState::Unconfirmed => out.push(Dock::Notice {
                 key: format!("unconfirmed:{}", entry.request.command_id),
@@ -166,6 +166,7 @@ fn card_questions(questions: &[T3Question]) -> Vec<Question> {
             text: q.question.clone(),
             options: q.options.iter().map(|o| o.label.clone()).collect(),
             other: q.options.is_empty() || q.allow_custom_answer != Some(false),
+            multi: q.multi_select == Some(true),
         })
         .collect()
 }
@@ -175,12 +176,19 @@ fn card_questions(questions: &[T3Question]) -> Vec<Question> {
 fn answers_for(questions: &[T3Question], given: &[(String, Vec<String>)]) -> Map<String, Value> {
     let mut out = Map::new();
     for q in questions {
-        let chosen = given.iter().find(|(id, _)| *id == q.id).and_then(|(_, a)| a.first()).cloned().unwrap_or_default();
-        let value = q.options.iter().find(|o| o.label == chosen).map_or(chosen.clone(), |o| o.answer().to_owned());
+        let chosen: Vec<String> = given
+            .iter()
+            .find(|(id, _)| *id == q.id)
+            .map(|(_, a)| a.iter().filter(|a| !a.trim().is_empty()).cloned().collect())
+            .unwrap_or_default();
+        let values: Vec<String> = chosen
+            .iter()
+            .map(|c| q.options.iter().find(|o| &o.label == c).map_or(c.clone(), |o| o.answer().to_owned()))
+            .collect();
         let answer = if q.multi_select == Some(true) {
-            Value::Array(if value.is_empty() { vec![] } else { vec![Value::String(value)] })
+            Value::Array(values.into_iter().map(Value::String).collect())
         } else {
-            Value::String(value)
+            Value::String(values.into_iter().next().unwrap_or_default())
         };
         out.insert(q.id.clone(), answer);
     }
@@ -636,10 +644,10 @@ pub fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                 let request_id = request.request_id.clone();
                 let outgoing = match (action, &request.kind) {
                     (Some(CardAction::Allow), _) => {
-                        Some(Outgoing::Approve { thread_id, request_id, decision: "accept" })
+                        Some(Outgoing::Approve { thread_id, request_id, decision: "accept".into() })
                     }
                     (Some(CardAction::Decline), PendingKind::Approval { .. }) => {
-                        Some(Outgoing::Approve { thread_id, request_id, decision: "decline" })
+                        Some(Outgoing::Approve { thread_id, request_id, decision: "decline".into() })
                     }
                     (Some(CardAction::Decline), PendingKind::Question { .. }) => {
                         Some(Outgoing::Dismiss { thread_id, request_id })
@@ -691,7 +699,9 @@ fn dock_action(app: &mut BuknoApp, key: &str, label: &str) {
             if let Some(t3) = app.t3.as_ref() {
                 t3.dismiss_command(&chat.environment, id);
             }
-            app.remote_pending.retain(|p| p.command_id != id);
+            if let Some(t3) = app.t3.as_mut() {
+                t3.untrack(id);
+            }
         }
         ("held", "Resume") => app.remote_command(None, Outgoing::ResumeQueue { thread_id }),
         ("held", "Remove") => {
@@ -767,6 +777,36 @@ pub fn new_chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
         c.text_secondary,
     );
 
+    // A launch whose reply was lost: say so, and offer to send it again.
+    let unconfirmed = env.as_ref().and_then(|e| {
+        e.outbox.iter().find(|o| {
+            o.state == OutboxState::Unconfirmed
+                && matches!(&o.request.outgoing, Outgoing::Launch { project_id, .. } if *project_id == new.project)
+        })
+    });
+    if let Some(entry) = unconfirmed {
+        let text = "Not confirmed: the new chat may not have reached T3, because the connection dropped before it answered. Sending again is safe; T3 starts it at most once.";
+        let actions = ["Send again", "Dismiss"];
+        let h = notice_height(ui, &theme, column.width(), text, actions.len());
+        let rect = Rect::from_min_size(pos2(column.left(), meta_y + 30.0), vec2(column.width(), h));
+        let id = entry.request.command_id.clone();
+        match notice_card(ui, &theme, rect, Id::new(("remote-new-dock", &id)), text, true, &actions) {
+            Some(0) => {
+                if let Some(t3) = app.t3.as_ref() {
+                    t3.retry(&new.environment, &id);
+                }
+            }
+            Some(_) => {
+                if let Some(t3) = app.t3.as_mut() {
+                    t3.dismiss_command(&new.environment, &id);
+                    t3.untrack(&id);
+                }
+            }
+            None => {}
+        }
+    }
+
+    let painter = ui.painter();
     let (model, _, _) = model_words(app);
     let provider = provider(app);
     let label = format!("{} · {model}", provider_name(provider));

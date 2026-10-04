@@ -23,7 +23,7 @@ failure rows are paused; T3 replaces them. The T3 stages follow.
 - [x] Pair with `orchestration:read orchestration:operate`; a Stage 1 sign-in asks to pair again.
 - [x] Typed commands with one command ID per action (`crates/t3-client/src/command.rs`); an outbox that marks lost replies "Not confirmed", settles them from the chat by the message or chat ID Bukno chose, and offers Send again with the same ID. Never resends by itself.
 - [x] New chats in a T3 project with a Codex or Claude model; composer, approval and question cards, Stop, queue (Enter while working), Steer (button or Alt+Enter), Steer now, Remove, Resume after Stop, T3's runtime modes in the permission menu.
-- [x] Drafts and the open chat kept in `t3-client-state.json`; nothing is resent after a restart.
+- [x] Drafts, the open chat and unsettled sends kept in `t3-client-state.json`; after a restart an unsettled send is checked with its original IDs, never resent as a new message.
 - [x] Live end-to-end check against the Ubuntu server with a demo video: [t3-operate.md](../e2e/scenarios/t3-operate.md).
 - [ ] Review Stage 2. Then confirm the T3 route and rewrite the backend specification.
 

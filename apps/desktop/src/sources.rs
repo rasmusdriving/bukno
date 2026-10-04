@@ -46,12 +46,28 @@ pub struct AddForm {
 
 /// What Bukno keeps about T3 chats on this computer.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct ClientState {
     version: u32,
     /// Draft text by [`draft_key`].
     drafts: BTreeMap<String, String>,
     last_open: Option<(String, String)>,
+    /// Sends T3 has not settled yet, kept across a restart so their outcome
+    /// is checked with their original IDs instead of the draft being sent
+    /// again as a new message.
+    pending: Vec<PendingSend>,
+}
+
+/// A message or new chat sent from a T3 composer and not settled yet.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSend {
+    pub environment: String,
+    /// The [`draft_key`] of the composer it was sent from.
+    pub key: String,
+    /// The text that was sent, trimmed. Only exactly this text is cleared.
+    pub draft: String,
+    pub request: CommandRequest,
 }
 
 /// The draft key of a chat, or of a new chat in a project.
@@ -109,8 +125,13 @@ impl T3Source {
         let view = hub.view();
         let state_file = state_dir.join("t3-client-state.json");
         // A file that cannot be read starts empty; drafts are a convenience.
-        let client =
+        let client: ClientState =
             std::fs::read(&state_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        // Sends from before the restart come back unconfirmed; the client
+        // settles them from the chat or offers Send again with the same IDs.
+        for pending in &client.pending {
+            hub.adopt(&pending.environment, pending.request.clone());
+        }
         Self {
             hub,
             view,
@@ -212,6 +233,34 @@ impl T3Source {
         let id = request.command_id.clone();
         self.hub.dispatch(environment, request);
         id
+    }
+
+    /// Send a message or new chat from the composer with this draft key, and
+    /// keep it on disk until T3 settles it.
+    pub fn send_tracked(&mut self, environment: &str, key: &str, draft: &str, outgoing: Outgoing) -> String {
+        let request = CommandRequest::new(outgoing);
+        let id = request.command_id.clone();
+        self.client.pending.push(PendingSend {
+            environment: environment.to_owned(),
+            key: key.to_owned(),
+            draft: draft.to_owned(),
+            request: request.clone(),
+        });
+        self.save();
+        self.hub.dispatch(environment, request);
+        id
+    }
+
+    pub fn pending_sends(&self) -> &[PendingSend] {
+        &self.client.pending
+    }
+
+    pub fn untrack(&mut self, command_id: &str) {
+        let before = self.client.pending.len();
+        self.client.pending.retain(|p| p.request.command_id != command_id);
+        if self.client.pending.len() != before {
+            self.save();
+        }
     }
 
     /// Send an unconfirmed command again, with its original command ID.

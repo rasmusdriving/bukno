@@ -23,7 +23,7 @@
 //! S7 After a restart the draft is lost, the open chat is not reopened, or a
 //!    running turn cannot be stopped (O15, O16).
 //! S8 A lost reply duplicates a message on retry, or a message T3 did run is
-//!    shown as unsent (O3).
+//!    shown as unsent, including when Bukno quits before the reply (O3, O15).
 //! S9 Sending while disconnected writes anything, or loses the draft (O5).
 //! S10 A dirty file in the workspace changes, or chat text and tokens reach
 //!    the log, state folder or evidence (O18, O20).
@@ -480,7 +480,7 @@ fn t3_operate_flow() {
     relay.set(FORWARD);
     let settled = app.wait(Duration::from_secs(60), |a| {
         connected(a)
-            && a.remote_pending.is_empty()
+            && a.t3.as_ref().is_some_and(|t| t.pending_sends().is_empty())
             && a.composer.text.is_empty()
             && thread(a).is_some_and(|t| t.rows.iter().any(|r| matches!(&r.item.kind, bukno_t3_client::model::TurnKind::UserMessage { text, .. } if text == lost_reply)))
     });
@@ -512,7 +512,9 @@ fn t3_operate_flow() {
     app.pump(1500);
     app.shot(&mut run, "not-confirmed");
     app.click("Send again");
-    let sent_again = app.wait(Duration::from_secs(60), |a| a.remote_pending.is_empty() && a.composer.text.is_empty());
+    let sent_again = app.wait(Duration::from_secs(60), |a| {
+        a.t3.as_ref().is_some_and(|t| t.pending_sends().is_empty()) && a.composer.text.is_empty()
+    });
     app.wait(Duration::from_secs(120), idle);
     app.pump(800);
     let p = projection(&truth, &codex_thread);
@@ -544,10 +546,41 @@ fn t3_operate_flow() {
     app.type_into(COMPOSER, "");
     app.pump(300);
 
+    // ----- Quit while a reply is lost; the relaunch settles it -------------------
+    run.caption("A reply lost, then Bukno quits: after the relaunch it is found in the chat, not sent again");
+    let across_restart = "Reply with the word three.";
+    relay.set(DROP_REPLIES);
+    send(&mut app, across_restart, false);
+    app.pump(2500);
+    let saved_pending = app.harness.state().t3.as_ref().is_some_and(|t| !t.pending_sends().is_empty());
+    drop(app);
+    relay.drop_all();
+    relay.set(FORWARD);
+    let mut app = launch(&run);
+    let settled_after_restart = app.wait(Duration::from_secs(90), |a| {
+        connected(a)
+            && a.remote.as_ref().is_some_and(|r| r.thread == codex_thread)
+            && a.t3.as_ref().is_some_and(|t| t.pending_sends().is_empty())
+            && a.composer.text.is_empty()
+            && thread(a).is_some_and(|t| t.current)
+    });
+    app.wait(Duration::from_secs(120), idle);
+    app.pump(1200);
+    app.shot(&mut run, "settled-after-restart");
+    let p = projection(&truth, &codex_thread);
+    run.check(
+        "S8 a send whose reply was lost before quitting is settled after the relaunch, once, and its draft cleared",
+        saved_pending && settled_after_restart && copies(&p, across_restart) == 1,
+        json!({"saved_before_quit": saved_pending, "settled_and_cleared": settled_after_restart, "copies_in_t3": copies(&p, across_restart)}),
+    );
+
     // ----- No duplicates, the dirty file, and leaks -------------------------------
     run.caption("Checks: every message once in T3, the dirty file untouched, no secrets on disk");
     for (thread_id, texts) in [
-        (&codex_thread, vec![first, second, long, queued_text, steer_text, held_text, lost_reply, lost_request]),
+        (
+            &codex_thread,
+            vec![first, second, long, queued_text, steer_text, held_text, lost_reply, lost_request, across_restart],
+        ),
         (&claude_thread, vec![claude_first, question]),
     ] {
         let p = projection(&truth, thread_id);

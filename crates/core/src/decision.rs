@@ -22,6 +22,8 @@ pub struct Question {
     pub options: Vec<String>,
     /// Free text is accepted besides the options.
     pub other: bool,
+    /// Several options may be chosen.
+    pub multi: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1548,6 +1548,7 @@ fn question_card(task: TaskId, run: RunId, choices: bool) -> ViewUpdate {
             text: format!("Please answer question {i} before work continues."),
             options: if choices { vec!["Choice A".into(), "Choice B".into()] } else { vec![] },
             other: choices,
+            multi: false,
         })
         .collect();
     ViewUpdate::Decisions {

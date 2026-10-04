@@ -27,6 +27,21 @@ pub enum CardAction {
     Answers(Vec<(String, Vec<String>)>),
 }
 
+/// Where a multi-select question keeps its chosen options, apart from its free text.
+fn selection_key(question: &Question) -> String {
+    format!("{}{SEPARATOR}chosen", question.id)
+}
+
+/// Separates chosen options; a control character no option label contains.
+const SEPARATOR: char = '\u{1f}';
+
+fn chosen_options(answers: &HashMap<String, String>, question: &Question) -> Vec<String> {
+    answers
+        .get(&selection_key(question))
+        .map(|s| s.split(SEPARATOR).filter(|o| !o.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
 pub fn card_id(decision: &DecisionView) -> Id {
     Id::new(("decision-card", decision.id))
 }
@@ -242,10 +257,10 @@ pub fn show(
                 questions
                     .iter()
                     .map(|q| {
-                        (
-                            q.id.clone(),
-                            answers.get(&q.id).filter(|a| !a.trim().is_empty()).cloned().into_iter().collect(),
-                        )
+                        // Chosen options first (several for multi-select), then any free text.
+                        let mut given = if q.multi { chosen_options(answers, q) } else { Vec::new() };
+                        given.extend(answers.get(&q.id).filter(|a| !a.trim().is_empty()).cloned());
+                        (q.id.clone(), given)
                     })
                     .collect(),
             ),
@@ -282,7 +297,8 @@ fn draw_questions(
         y += gh + 8.0;
         let mut bx = x;
         for option in &q.options {
-            let chosen = answers.get(&q.id) == Some(option);
+            let chosen =
+                if q.multi { chosen_options(answers, q).contains(option) } else { answers.get(&q.id) == Some(option) };
             let galley = ui.painter().layout_no_wrap(option.clone(), theme.font(&theme.text.t_ui), c.text_primary);
             let w = galley.size().x + 20.0;
             let b = Rect::from_min_size(pos2(bx, y), vec2(w, 30.0));
@@ -299,7 +315,17 @@ fn draw_questions(
             ui.painter().galley(b.center() - galley.size() / 2.0, galley, c.text_primary);
             focus_ring(ui, theme, &r, theme.radius.radius_md);
             if r.clicked() && !sending {
-                answers.insert(q.id.clone(), option.clone());
+                if q.multi {
+                    let mut picked = chosen_options(answers, q);
+                    if let Some(at) = picked.iter().position(|p| p == option) {
+                        picked.remove(at);
+                    } else {
+                        picked.push(option.clone());
+                    }
+                    answers.insert(selection_key(q), picked.join(&SEPARATOR.to_string()));
+                } else {
+                    answers.insert(q.id.clone(), option.clone());
+                }
             }
             bx += w + 6.0;
         }
