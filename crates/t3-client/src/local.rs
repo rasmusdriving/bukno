@@ -3,7 +3,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use fs2::FileExt;
 use serde::Deserialize;
@@ -151,6 +152,26 @@ pub(crate) fn install_tls_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+/// Use ordinary Windows drive/UNC paths when passing a folder to Node or an engine.
+pub fn workspace_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_owned())
+}
+
+fn process_started_after_record(pid: u32, modified: std::time::SystemTime) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    let Some(process) = system.process(pid) else { return false };
+    // Unknown start times stay conservative. Allow a second for OS/file precision.
+    let written = modified.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+    written.is_some_and(|written| process.start_time() > written.saturating_add(1))
+}
+
 fn process_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -209,6 +230,14 @@ async fn discover(home: &Path) -> Result<Option<(Url, Descriptor)>, String> {
         if !process_alive(record.pid) {
             continue;
         }
+        if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
+            let pid = record.pid;
+            let reused =
+                tokio::task::spawn_blocking(move || process_started_after_record(pid, modified)).await.unwrap_or(false);
+            if reused {
+                continue;
+            }
+        }
         let base = normalize_address(&record.origin).map_err(|e| e.user_message())?;
         // Permit loopback and addresses actually assigned to this computer.
         // Binding an ephemeral socket proves locality without network scanning.
@@ -252,17 +281,26 @@ pub async fn prepare(
     // One cross-process setup lock also protects staging and server launch.
     std::fs::create_dir_all(&config.managed_home)
         .map_err(|_| "Bukno could not create its T3 folder. Check free space and folder permissions.".to_owned())?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(config.managed_home.join("bukno-setup.lock"))
-        .map_err(|_| "Bukno could not open its T3 setup lock.".to_owned())?;
+    let lock = Arc::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(config.managed_home.join("bukno-setup.lock"))
+            .map_err(|_| "Bukno could not open its T3 setup lock.".to_owned())?,
+    );
     lock.try_lock_exclusive()
         .map_err(|_| "Another Bukno window is setting up T3. Wait for it to finish and try again.".to_owned())?;
     progress("Looking for T3 Code…");
-    let mut launcher = config.launchers.iter().find(|l| l.program.is_file()).cloned();
+    let managed =
+        Launcher { program: config.install_dir.join(if cfg!(windows) { "t3.exe" } else { "t3" }), entry: None };
+    let resume_managed = config.managed_home.join("userdata/statev2.sqlite").is_file();
+    let mut launcher = if resume_managed && managed.program.is_file() {
+        Some(managed)
+    } else {
+        config.launchers.iter().find(|l| l.program.is_file()).cloned()
+    };
     // Probe even when the CLI is missing: do not launch a replacement for a
     // live server whose install has moved. The download supplies just the CLI.
     let existing = match discover(&config.t3_home).await? {
@@ -270,14 +308,14 @@ pub async fn prepare(
         None => discover(&config.managed_home).await?.map(|found| (config.managed_home.clone(), found)),
     };
     if launcher.is_none() && install {
-        launcher = Some(download(config, progress).await?);
+        launcher = Some(download(config, progress, lock.clone()).await?);
     }
     let Some(launcher) = launcher else { return Ok(None) };
     if let Some((home, (base, descriptor))) = existing {
         return Ok(Some(LocalTarget { launcher, home, base, descriptor }));
     }
     progress("Starting T3 Code…");
-    if launcher.entry.is_some() {
+    if launcher.entry.is_some() && !resume_managed {
         // The desktop app owns its server and its single-instance behavior.
         // Open it normally, without ELECTRON_RUN_AS_NODE, then rediscover it.
         let mut command = Command::new(&launcher.program);
@@ -383,14 +421,24 @@ impl LocalTarget {
         Ok(request.credential)
     }
 
-    pub async fn add_project(&self, path: &Path) -> Result<(), String> {
+    pub async fn add_project(&self, path: &Path) -> Result<String, String> {
         let mut command = self.launcher.command();
         command
             .args(["project", "add", "--title", "Bukno chats"])
             .arg(path)
             .env("T3CODE_HOME", &self.home)
             .current_dir(&self.home);
-        output(command, 30).await.map(|_| ())
+        let bytes = output(command, 30).await?;
+        let text = String::from_utf8_lossy(&bytes);
+        text.lines()
+            .find_map(|line| {
+                let id = line.trim().strip_prefix("Added project ")?.split_whitespace().next()?;
+                uuid::Uuid::parse_str(id).ok()?;
+                Some(id.to_owned())
+            })
+            .ok_or_else(|| {
+                "T3 added the folder but did not return its project details. Check the connection and try again.".into()
+            })
     }
 }
 
@@ -406,50 +454,137 @@ fn release_asset() -> Result<(&'static str, &'static str), String> {
 }
 
 /// Cleans an interrupted download as well as ordinary errors.
-struct StagingCleanup(PathBuf);
+struct StagingCleanup {
+    path: PathBuf,
+    // Keep the setup reservation until a cancelled worker has finished cleanup.
+    lock: Arc<std::fs::File>,
+}
+impl StagingCleanup {
+    async fn remove(mut self) {
+        let path = std::mem::take(&mut self.path);
+        let lock = self.lock.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _lock = lock;
+            std::fs::remove_dir_all(path)
+        })
+        .await;
+    }
+}
 impl Drop for StagingCleanup {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let path = std::mem::take(&mut self.path);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let lock = self.lock.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn_blocking(move || {
+                let _lock = lock;
+                let _ = std::fs::remove_dir_all(path);
+            });
+        } else {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }
 
-async fn download(config: &LocalConfig, progress: &(dyn Fn(&str) + Send + Sync)) -> Result<Launcher, String> {
+async fn download(
+    config: &LocalConfig,
+    progress: &(dyn Fn(&str) + Send + Sync),
+    lock: Arc<std::fs::File>,
+) -> Result<Launcher, String> {
     let (asset, checksum) = release_asset()?;
     let parent = config.install_dir.parent().ok_or_else(|| "T3's install folder is unavailable.".to_owned())?;
     std::fs::create_dir_all(parent)
         .map_err(|_| "Bukno could not create the download folder. Check free space and permissions.".to_owned())?;
-    let staging = parent.join(format!(".download-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&staging).map_err(|_| "Bukno could not prepare the T3 download.".to_owned())?;
-    let _cleanup = StagingCleanup(staging.clone());
-    let result = download_into(&staging, asset, checksum, progress).await;
-    let result = match result {
-        Ok(()) => {
-            if config.install_dir.exists() {
-                Err("A T3 installation already exists here. Check its permissions and try again.".into())
-            } else {
-                std::fs::rename(&staging, &config.install_dir)
-                    .map_err(|_| "Bukno could not finish installing T3. Check free space and try again.".to_owned())
+    let sweep = parent.to_owned();
+    let sweep_lock = lock.clone();
+    // The setup lock is held. Only remove this installer's abandoned UUID staging.
+    tokio::task::spawn_blocking(move || {
+        let _lock = sweep_lock;
+        for entry in std::fs::read_dir(sweep).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            let owned = name
+                .to_str()
+                .and_then(|n| n.strip_prefix(".download-"))
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+            if owned && entry.file_type().is_ok_and(|t| t.is_dir()) {
+                let _ = std::fs::remove_dir_all(entry.path());
             }
         }
-        Err(error) => Err(error),
-    };
-    let _ = std::fs::remove_dir_all(&staging);
+    })
+    .await
+    .map_err(|_| "Bukno could not prepare the download folder.".to_owned())?;
+    let staging = parent.join(format!(".download-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&staging).map_err(|_| "Bukno could not prepare the T3 download.".to_owned())?;
+    let cleanup = StagingCleanup { path: staging.clone(), lock };
+    if let Err(error) = download_archive(&staging, asset, checksum, progress).await {
+        cleanup.remove().await;
+        return Err(error);
+    }
+    progress("Installing T3 Code…");
+    // Give the worker ownership of staging while extracting. If setup is
+    // cancelled, it finishes and cleans up without a competing deletion.
+    let (cleanup, extracted) = tokio::task::spawn_blocking(move || {
+        let result = extract_archive(&cleanup.path, asset);
+        (cleanup, result)
+    })
+    .await
+    .map_err(|_| "T3's download could not be installed.".to_owned())?;
+    let result = async {
+        extracted?;
+        let launcher = Launcher { program: staging.join(if cfg!(windows) { "t3.exe" } else { "t3" }), entry: None };
+        let version_bytes = output(
+            {
+                let mut c = launcher.command();
+                c.arg("--version");
+                c
+            },
+            30,
+        )
+        .await?;
+        if !String::from_utf8_lossy(&version_bytes).contains(crate::pinned::SERVER_VERSION) {
+            return Err("The downloaded T3 version did not match. Try downloading it again.".into());
+        }
+        let old_binary = config.install_dir.join(if cfg!(windows) { "t3.exe" } else { "t3" });
+        let backup = if config.install_dir.exists() {
+            if old_binary.is_file() {
+                return Err("A T3 installation already exists here. Check its permissions and try again.".into());
+            }
+            let backup = parent.join(format!(".incomplete-{}-{}", crate::pinned::SERVER_VERSION, uuid::Uuid::new_v4()));
+            tokio::fs::rename(&config.install_dir, &backup).await.map_err(|_| {
+                "Bukno could not repair the incomplete T3 installation. Check folder permissions.".to_owned()
+            })?;
+            Some(backup)
+        } else {
+            None
+        };
+        if tokio::fs::rename(&staging, &config.install_dir).await.is_err() {
+            if let Some(backup) = backup {
+                let _ = tokio::fs::rename(backup, &config.install_dir).await;
+            }
+            return Err("Bukno could not finish installing T3. Check free space and try again.".into());
+        }
+        Ok::<_, String>(())
+    }
+    .await;
+    cleanup.remove().await;
     result?;
     Ok(Launcher { program: config.install_dir.join(if cfg!(windows) { "t3.exe" } else { "t3" }), entry: None })
 }
 
-async fn download_into(
+async fn download_archive(
     staging: &Path,
     asset: &str,
     checksum: &str,
     progress: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<(), String> {
-    use std::io::Write;
+    use tokio::io::AsyncWriteExt;
     install_tls_provider();
     let client = reqwest::Client::builder()
         .https_only(true)
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(300))
+        .read_timeout(Duration::from_secs(60))
         .user_agent("Bukno T3 setup")
         .build()
         .map_err(|_| "Bukno could not prepare a secure download.".to_owned())?;
@@ -463,7 +598,8 @@ async fn download_into(
         .and_then(reqwest::Response::error_for_status)
         .map_err(|_| "T3 could not be downloaded. Check your internet connection and try again.".to_owned())?;
     let archive_path = staging.join("archive");
-    let mut file = std::fs::File::create(&archive_path)
+    let mut file = tokio::fs::File::create(&archive_path)
+        .await
         .map_err(|_| "Bukno could not save the download. Check free space and permissions.".to_owned())?;
     let mut hasher = Sha256::new();
     let mut received = 0_u64;
@@ -478,6 +614,7 @@ async fn download_into(
             return Err("The T3 download was unexpectedly large. Try again later.".into());
         }
         file.write_all(&chunk)
+            .await
             .map_err(|_| "Bukno could not save the download. Check free space and try again.".to_owned())?;
         hasher.update(&chunk);
         let mb = received / (1024 * 1024);
@@ -486,12 +623,15 @@ async fn download_into(
             progress(&format!("Downloading T3 Code… {mb} MB"));
         }
     }
-    file.sync_all().map_err(|_| "Bukno could not save the completed download.".to_owned())?;
+    file.sync_all().await.map_err(|_| "Bukno could not save the completed download.".to_owned())?;
     drop(file);
     if format!("{:x}", hasher.finalize()) != checksum {
         return Err("The T3 download did not pass verification. Try downloading it again.".into());
     }
-    progress("Installing T3 Code…");
+    Ok(())
+}
+
+fn extract_archive(staging: &Path, asset: &str) -> Result<(), String> {
     // Upstream's archives have one top-level folder. Copy only regular files
     // and directories; reject traversal, links and unreasonable expansion.
     let unpack = |relative: &Path| -> Result<PathBuf, String> {
@@ -506,6 +646,7 @@ async fn download_into(
         }
         Ok(staging.join(tail))
     };
+    let archive_path = staging.join("archive");
     let archive = std::fs::File::open(&archive_path).map_err(|_| "Bukno could not read the download.".to_owned())?;
     let mut expanded = 0_u64;
     if asset.ends_with(".zip") {
@@ -553,18 +694,5 @@ async fn download_into(
         }
     }
     std::fs::remove_file(archive_path).map_err(|_| "Bukno could not finish the installation.".to_owned())?;
-    let launcher = Launcher { program: staging.join(if cfg!(windows) { "t3.exe" } else { "t3" }), entry: None };
-    let version_bytes = output(
-        {
-            let mut c = launcher.command();
-            c.arg("--version");
-            c
-        },
-        30,
-    )
-    .await?;
-    if !String::from_utf8_lossy(&version_bytes).contains(version) {
-        return Err("The downloaded T3 version did not match. Try downloading it again.".into());
-    }
     Ok(())
 }

@@ -6,6 +6,8 @@ then pairs through `t3 pair`. The short-lived link stays in memory. The access
 sign-in stays in the system keychain with the existing read/operate scopes.
 A saved connection is reused, including after the server changes its port.
 Existing remote connections remain available.
+If the OS proves that a recorded PID was reused after the record was written,
+Bukno ignores the stale record. An uncertain live record still blocks startup.
 
 If the desktop app is installed but closed, Bukno opens it normally and waits
 for its server. It uses the CLI bundled with that installation for pairing.
@@ -13,13 +15,22 @@ If an installed CLI has no running server, or T3 was downloaded by Bukno,
 Bukno starts `t3 serve` on a dynamic loopback port in its own separate data
 folder. It never opens a second writer on an existing T3 database. Attached
 servers and persistent managed servers keep running when Bukno closes.
+When both are stopped, an existing managed database takes priority over opening
+a newly installed desktop app. Servers that are already running are discovered
+first. Installing the desktop alone does not switch chat histories.
 
 If T3 is missing, **Download T3 Code** installs the self-contained upstream CLI
 from the exact release in [PINNED.md](../crates/t3-client/PINNED.md).
 SHA-256 values are pinned from that release's official assets. Downloads use
 HTTPS, stream to disk, reject a checksum mismatch, and extract only safe
 regular files/directories. Staging is cleaned on failure or cancellation.
-An existing installation is kept intact. There is no Node, npm, shell script,
+Stalled reads time out after 60 seconds; a progressing download has no five-minute
+limit. Extraction runs off the connection worker. Cancelled extraction retains
+the setup lock until its staging has been cleaned. A later download removes
+abandoned staging left by a forced quit.
+A usable installation is kept intact. If its binary is missing, the incomplete
+folder is preserved under `.incomplete-*` while the verified replacement is
+installed. There is no Node, npm, shell script,
 administrator prompt or global PATH change in this installation flow.
 
 The default launch detects CLI paths, common per-user install locations and
@@ -31,10 +42,16 @@ unverified; Windows compilation passes.
 
 A fresh server registers the chat folder chosen in onboarding through
 `t3 project add`. The recommended folder is `~/Documents/Bukno chats`.
+Bukno passes an ordinary OS path and confirms the exact project ID returned by
+the CLI, rather than comparing folder strings. A delayed project acknowledgement
+returns to a retryable setup screen after 45 seconds.
 An existing server names the project Continue will open before the user
 continues. No message is sent during setup. New chat and the next launch
 remember the chosen T3 project; existing direct Codex project chats remain
 available. Advanced connection keeps the explicit remote address/link form.
+Direct-project new chats and pending direct sends retain their selected route.
+A remembered T3 project is used only when it still exists and is connected;
+deleting the project or forgetting its environment clears that selection.
 Automatic discovery accepts loopback and addresses assigned to this computer; it does not scan a network or decrypt T3's remote catalog.
 
 ## Internal files
@@ -67,6 +84,12 @@ startup after a stopped managed server, a live invalid runtime record, and
 an offline download with staging cleanup. Test state and runtime files stay
 internal; screenshots and `result.json` go to the evidence folder. The test
 stops its disposable managed server and cleans its successful scratch run.
+The same check also exercises the real direct-project sidebar action beside a
+connected T3, project-ID completion, a bounded missing acknowledgement, removal
+of a remembered project, a reused PID, desktop-install precedence and repair of
+an incomplete binary with abandoned staging. These checks passed on Ubuntu;
+their evidence is under `review-fixes/` in the folder below. The delayed
+acknowledgement check sets the elapsed wait directly in the native harness.
 
 Closed desktop startup can be checked on Ubuntu without interrupting the
 user's active T3: run the same test with `BUKNO_T3_SETUP_MODE=desktop`, an

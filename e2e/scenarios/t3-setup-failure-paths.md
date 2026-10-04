@@ -19,6 +19,14 @@ Failure paths recorded before implementing the local adapter, 4 October 2026.
 | Pairing/keychain fails | Do not claim Ready; keep a useful retry action and the existing manual pairing route |
 | Remote server is already paired | Keep it connected; automatic local setup must not replace or remove it |
 | Unsupported download platform | Explain the limitation and offer advanced connection; do not download the wrong architecture |
+| A direct project is selected while T3 is connected | Keep its new chat and any pending direct send on the direct route |
+| Remembered T3 project is removed or its environment forgotten | Clear the selection and offer a usable new-chat screen |
+| T3 normalizes a chosen folder, or its project snapshot is delayed | Register a normal OS path, match the returned project ID and bound the wait with a retry message |
+| Download progresses for more than five minutes | Keep downloading while bytes arrive; time out stalled reads rather than the entire request |
+| A stopped managed server's PID is reused after reboot | Ignore a runtime record only when the OS proves that process started after the record; block uncertain live records |
+| T3 desktop is installed after Bukno created its own backend | Restart the existing managed database instead of silently choosing an empty desktop environment |
+| Managed binary is missing, or a download was killed | Preserve the incomplete installation while replacing it; remove abandoned staging under the setup lock |
+| Extraction runs while another environment is connected | Keep extraction and large file operations off the connection worker |
 
 Live acceptance uses the real native onboarding and real T3 CLI/server. Retain
 screenshots and a structured result outside Git. Check attached discovery,

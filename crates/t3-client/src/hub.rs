@@ -157,6 +157,8 @@ pub struct HubView {
     pub pairing: PairingStatus,
     pub store_error: Option<String>,
     pub local_setup: SetupStatus,
+    /// The exact project returned by the local CLI, then confirmed by the stream.
+    pub local_project: Option<(String, String)>,
 }
 
 enum EnvCommand {
@@ -184,6 +186,7 @@ struct Shared {
     store_error: Mutex<Option<String>>,
     local_setup: Mutex<SetupStatus>,
     local_target: Mutex<Option<Arc<LocalTarget>>>,
+    local_project: Mutex<Option<(String, String)>>,
     revision: AtomicU64,
     /// The running task of each environment, with its generation.
     tasks: Mutex<BTreeMap<String, (u64, mpsc::UnboundedSender<EnvCommand>)>>,
@@ -250,6 +253,7 @@ impl Hub {
             store_error: Mutex::new(store_error),
             local_setup: Mutex::new(SetupStatus::Idle),
             local_target: Mutex::new(None),
+            local_project: Mutex::new(None),
             revision: AtomicU64::new(1),
             tasks: Mutex::new(BTreeMap::new()),
             next_generation: AtomicU64::new(1),
@@ -268,6 +272,7 @@ impl Hub {
             pairing: self.shared.pairing.lock().unwrap().clone(),
             store_error: self.shared.store_error.lock().unwrap().clone(),
             local_setup: self.shared.local_setup.lock().unwrap().clone(),
+            local_project: self.shared.local_project.lock().unwrap().clone(),
         }
     }
 
@@ -409,14 +414,18 @@ impl Hub {
             }
             *status = SetupStatus::Working("Preparing your chat folder…".into());
         }
+        *self.shared.local_project.lock().unwrap() = None;
         self.shared.changed();
         let shared = self.shared.clone();
         self.runtime.spawn(async move {
             let status = match target.add_project(&path).await {
-                Ok(()) => SetupStatus::Ready {
-                    environment_id: target.descriptor.environment_id.clone(),
-                    label: target.descriptor.label.clone(),
-                },
+                Ok(project) => {
+                    *shared.local_project.lock().unwrap() = Some((target.descriptor.environment_id.clone(), project));
+                    SetupStatus::Ready {
+                        environment_id: target.descriptor.environment_id.clone(),
+                        label: target.descriptor.label.clone(),
+                    }
+                }
                 Err(error) => SetupStatus::Failed(error),
             };
             *shared.local_setup.lock().unwrap() = status;

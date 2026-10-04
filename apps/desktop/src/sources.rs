@@ -20,7 +20,7 @@ use bukno_t3_client::hub::{OutboxEntry, ThreadView};
 use bukno_t3_client::model::TurnKind;
 use bukno_t3_client::secret::SystemKeychain;
 use bukno_t3_client::thread::Row;
-use bukno_t3_client::{EnvironmentView, Hub, HubView, Log};
+use bukno_t3_client::{ConnectionStatus, EnvironmentView, Hub, HubView, Log};
 
 /// Which chat is meant, wherever it lives.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -163,6 +163,16 @@ impl T3Source {
             return false;
         }
         self.view = self.hub.view();
+        let missing = self.client.preferred_project.as_ref().is_some_and(|(environment, project)| {
+            self.environment(environment).is_none_or(|e| {
+                matches!(e.status, ConnectionStatus::Connected { current: true })
+                    && !e.projects.iter().any(|p| p.id == *project)
+            })
+        });
+        if missing {
+            self.client.preferred_project = None;
+            let _ = self.save();
+        }
         true
     }
 
@@ -172,7 +182,13 @@ impl T3Source {
     }
 
     pub fn preferred_project(&self) -> Option<(String, String)> {
-        self.client.preferred_project.clone()
+        let (environment, project) = self.client.preferred_project.as_ref()?;
+        self.environment(environment).filter(|e| {
+            e.can_operate()
+                && matches!(e.status, ConnectionStatus::Connected { current: true })
+                && e.projects.iter().any(|p| p.id == *project)
+        })?;
+        Some((environment.clone(), project.clone()))
     }
 
     pub fn setup_local(&self, install: bool) {
@@ -371,6 +387,10 @@ impl T3Source {
     }
 
     pub fn forget(&mut self, environment: &str) {
+        if self.client.preferred_project.as_ref().is_some_and(|(id, _)| id == environment) {
+            self.client.preferred_project = None;
+            let _ = self.save();
+        }
         if self.open.as_ref().is_some_and(|c| c.environment == environment) {
             self.open = None;
             self.built = None;

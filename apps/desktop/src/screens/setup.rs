@@ -131,8 +131,8 @@ pub fn show(app: &mut BuknoApp, ui: &mut Ui, full: Rect) {
                     app.show_setup = false;
                     app.new_remote_chat(environment, project);
                 } else if let Some(folder) = folder {
-                    let path = std::fs::canonicalize(&folder).unwrap_or_else(|_| folder.into());
-                    app.finish_t3_setup = Some((environment, path.clone()));
+                    let path = bukno_t3_client::local::workspace_path(std::path::Path::new(&folder));
+                    app.finish_t3_setup = Some((environment, std::time::Instant::now()));
                     if let Some(t3) = app.t3.as_ref() { t3.add_local_project(path); }
                 }
             }

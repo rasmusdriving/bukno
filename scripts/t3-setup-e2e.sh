@@ -17,6 +17,9 @@ BUKNO_EVIDENCE_DIR="$evidence/attached" \
 BUKNO_T3_SETUP_ROOT="$root/download" BUKNO_T3_SETUP_MODE=download BUKNO_T3_HOME="$root/no-existing-t3" BUKNO_T3_CLI="$root/missing-t3" \
 BUKNO_EVIDENCE_DIR="$evidence/download" \
   cargo test --locked -p bukno-desktop --test t3_setup -- --nocapture --test-threads=1
+BUKNO_T3_SETUP_ROOT="$root/repair" BUKNO_T3_SETUP_MODE=repair BUKNO_T3_HOME="$root/no-existing-t3" BUKNO_T3_CLI="$root/missing-t3" \
+BUKNO_EVIDENCE_DIR="$evidence/repair" \
+  cargo test --locked -p bukno-desktop --test t3_setup -- --nocapture --test-threads=1
 # A separate root keeps the downloaded server from the failure scenario.
 BUKNO_T3_SETUP_ROOT="$root/invalid" BUKNO_T3_SETUP_MODE=invalid-runtime \
 BUKNO_T3_HOME="$root/invalid-home" BUKNO_T3_CLI="$root/missing-t3" \

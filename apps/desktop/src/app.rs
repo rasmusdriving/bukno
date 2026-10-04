@@ -156,7 +156,7 @@ pub struct BuknoApp {
     pub setup: Option<SetupView>,
     /// Show the setup screen over the chats (from the profile row).
     pub show_setup: bool,
-    pub finish_t3_setup: Option<(String, std::path::PathBuf)>,
+    pub finish_t3_setup: Option<(String, std::time::Instant)>,
     /// Messages that are not about one chat.
     pub banner: Option<String>,
     pub quit: QuitFlow,
@@ -778,9 +778,10 @@ impl BuknoApp {
     fn poll_t3(&mut self, ctx: &egui::Context) {
         let Some(t3) = self.t3.as_mut() else { return };
         t3.poll();
-        if let Some((environment, path)) = self.finish_t3_setup.clone() {
+        if let Some((environment, started)) = self.finish_t3_setup.clone() {
             let project = t3.environment(&environment).and_then(|e| {
-                e.projects.iter().find(|p| std::path::Path::new(&p.workspace_root) == path).map(|p| p.id.clone())
+                let (id, project) = t3.view.local_project.as_ref()?;
+                (id == &environment && e.projects.iter().any(|p| &p.id == project)).then(|| project.clone())
             });
             if let Some(project) = project {
                 self.finish_t3_setup = None;
@@ -788,17 +789,21 @@ impl BuknoApp {
                 self.new_remote_chat(environment, project);
             } else if matches!(t3.view.local_setup, bukno_t3_client::local::SetupStatus::Failed(_)) {
                 self.finish_t3_setup = None;
+            } else if started.elapsed() >= std::time::Duration::from_secs(45) {
+                self.finish_t3_setup = None;
+                self.banner =
+                    Some("T3 hasn't made your chat folder available yet. Check the connection and try again.".into());
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
-        if self.view == View::NewChat && !self.show_setup {
-            let preferred = self.t3.as_ref().and_then(|t| {
-                let (environment, project) = t.preferred_project()?;
-                t.environment(&environment).filter(|e| {
-                    e.projects.iter().any(|p| p.id == project)
-                        && matches!(e.status, bukno_t3_client::ConnectionStatus::Connected { current: true })
-                })?;
-                Some((environment, project))
-            });
+        if self.view == View::NewChat
+            && !self.show_setup
+            && self.new_chat_project.is_none()
+            && self.pending_submit.is_none()
+            && self.composer.text.is_empty()
+        {
+            let preferred = self.t3.as_ref().and_then(T3Source::preferred_project);
             if let Some((environment, project)) = preferred {
                 self.new_remote_chat(environment, project);
             }
