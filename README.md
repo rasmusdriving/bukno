@@ -11,6 +11,12 @@ and picks up again after a restart. See [the read-only check](e2e/scenarios/t3-r
 and [the Stage 2 check](e2e/scenarios/t3-operate.md). The direct Codex path
 still works unchanged. [Ubuntu setup](docs/ubuntu.md) covers the native app on Ubuntu.
 
+Onboarding now finds a local T3 server and connects automatically. If T3 is
+installed but closed, Bukno starts it. If it is missing, **Download T3 Code**
+installs a verified, self-contained backend and connects without Node or a
+terminal. Remote addresses and pairing links remain in **Advanced connection**.
+See [automatic setup](docs/t3-setup.md) for verification and platform limits.
+
 ## Agreed architecture
 
 - Starts as the author's daily driver, published as open source for others to use.

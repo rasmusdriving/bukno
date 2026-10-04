@@ -19,10 +19,10 @@ devbox-local /mnt/toshiba/dev/repositories/codex/bukno -- \
 
 `--debug` installs a development build instead. The script installs the binary
 in `~/.local/share/bukno/bin/`, a `~/.local/bin/bukno` launcher, and a Bukno
-application-menu entry. It does not install or configure a T3 backend.
+application-menu entry. T3 setup happens inside onboarding when the app opens; the installer itself does not change the running T3 server.
 
 Normal app state is in `$XDG_DATA_HOME/bukno`, or `~/.local/share/bukno` when
-that variable is absent or relative. The first launch asks for the work folder.
+that variable is absent or relative. The first launch finds T3 automatically, offers a download if needed, and offers a chat folder when the server has no projects.
 `BUKNO_STATE_DIR` and `BUKNO_WORK_DIR` can isolate a verification run. Existing
 Mac state is not copied. The installed Codex CLI supplies its own login.
 

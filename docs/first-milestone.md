@@ -27,6 +27,18 @@ failure rows are paused; T3 replaces them. The T3 stages follow.
 - [x] Live end-to-end check against the Ubuntu server with a demo video: [t3-operate.md](../e2e/scenarios/t3-operate.md).
 - [ ] Review Stage 2. Then confirm the T3 route and rewrite the backend specification.
 
+## Automatic T3 onboarding
+
+- [x] Record failure paths before implementation ([setup failure paths](../e2e/scenarios/t3-setup-failure-paths.md)).
+- [x] Discover T3 from its runtime record, verify identity and reuse the keychain connection.
+- [x] Start a closed installed desktop app or a separate persistent managed backend.
+- [x] Download a pinned self-contained release, verify SHA-256, extract safely and install without Node.
+- [x] Native connection card, progress, retry, recommended chat folder and advanced remote pairing.
+- [x] Real Ubuntu discovery, closed desktop startup in an isolated profile, download/start/pair, client/server restart, invalid runtime and offline download. The existing full Codex/Claude flow still passes.
+- [ ] Real macOS and Windows installation/startup checks. Windows compilation passes; this is not runtime proof.
+
+See [automatic setup](t3-setup.md). This adds setup under [decision 38](decisions.md); the remaining backend stages keep their existing scope.
+
 This is a checklist. The [first version specification](first-version-specification.md) defines what each item means, the pass it lands in, and its acceptance evidence; where this list and the specification differ, the specification wins ([decision 31](decisions.md)). Claude builds the foundation and Sol reviews each pass ([decision 34](decisions.md)).
 
 ## Done before implementation

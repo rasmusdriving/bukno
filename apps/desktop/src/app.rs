@@ -156,6 +156,7 @@ pub struct BuknoApp {
     pub setup: Option<SetupView>,
     /// Show the setup screen over the chats (from the profile row).
     pub show_setup: bool,
+    pub finish_t3_setup: Option<(String, std::time::Instant)>,
     /// Messages that are not about one chat.
     pub banner: Option<String>,
     pub quit: QuitFlow,
@@ -265,6 +266,7 @@ impl BuknoApp {
             engine: None,
             setup: None,
             show_setup: false,
+            finish_t3_setup: None,
             banner: None,
             quit: QuitFlow::None,
             menu: None,
@@ -300,15 +302,26 @@ impl BuknoApp {
 
     /// Start with the user's own state and engines.
     pub fn real(ctx: &egui::Context, paths: AppPaths, store: bukno_storage::Store) -> Self {
+        Self::start_real(ctx, paths, store, std::env::var("BUKNO_T3").as_deref() != Ok("0"))
+    }
+
+    /// The existing direct Codex route, also used by its isolated live checks.
+    pub fn direct(ctx: &egui::Context, paths: AppPaths, store: bukno_storage::Store) -> Self {
+        Self::start_real(ctx, paths, store, false)
+    }
+
+    fn start_real(ctx: &egui::Context, paths: AppPaths, store: bukno_storage::Store, use_t3: bool) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let repaint = ctx.clone();
         let coordinator =
             Coordinator::start(paths.clone(), store, tx, std::sync::Arc::new(move || repaint.request_repaint()));
         let scenario = Scenario::named("empty").expect("empty scenario");
-        let t3 = (std::env::var("BUKNO_T3").as_deref() != Ok("0")).then(|| T3Source::start(&paths.state_dir, ctx));
+        let t3 = use_t3.then(|| T3Source::start(&paths.state_dir, ctx));
         let mut app =
             Self::with_mode(ctx, Theme::load(), Mode::Real, scenario, paths, Backend::Coordinator(coordinator), rx);
         let last = t3.as_ref().and_then(T3Source::last_open);
+        app.show_setup = t3.as_ref().is_some_and(|t| t.view.environments.is_empty())
+            && std::env::var("BUKNO_T3_AUTO_SETUP").as_deref() != Ok("0");
         app.t3 = t3;
         // Pick up where the user left off; nothing is resent.
         if let Some(chat) = last {
@@ -430,6 +443,12 @@ impl BuknoApp {
 
     /// Show the new-chat screen, optionally in a project.
     pub fn new_chat(&mut self, project: Option<ProjectId>) {
+        if project.is_none()
+            && let Some((environment, project)) = self.t3.as_ref().and_then(T3Source::preferred_project)
+        {
+            self.new_remote_chat(environment, project);
+            return;
+        }
         self.flush_draft();
         let was_remote = matches!(self.view, View::Remote | View::RemoteNew);
         self.leave_remote();
@@ -506,6 +525,9 @@ impl BuknoApp {
             t3.close_chat();
         }
         self.remote = None;
+        if let Some(t3) = self.t3.as_mut() {
+            t3.prefer_project(&environment, &project);
+        }
         let model = self.t3.as_ref().and_then(|t| default_model(t, &environment));
         let mut state = ChatState::default();
         if let Some(t3) = self.t3.as_ref() {
@@ -756,6 +778,36 @@ impl BuknoApp {
     fn poll_t3(&mut self, ctx: &egui::Context) {
         let Some(t3) = self.t3.as_mut() else { return };
         t3.poll();
+        if let Some((environment, started)) = self.finish_t3_setup.clone() {
+            let project = t3.environment(&environment).and_then(|e| {
+                let (id, project) = t3.view.local_project.as_ref()?;
+                (id == &environment && e.projects.iter().any(|p| &p.id == project)).then(|| project.clone())
+            });
+            if let Some(project) = project {
+                self.finish_t3_setup = None;
+                self.show_setup = false;
+                self.new_remote_chat(environment, project);
+            } else if matches!(t3.view.local_setup, bukno_t3_client::local::SetupStatus::Failed(_)) {
+                self.finish_t3_setup = None;
+            } else if started.elapsed() >= std::time::Duration::from_secs(45) {
+                self.finish_t3_setup = None;
+                self.banner =
+                    Some("T3 hasn't made your chat folder available yet. Check the connection and try again.".into());
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        }
+        if self.view == View::NewChat
+            && !self.show_setup
+            && self.new_chat_project.is_none()
+            && self.pending_submit.is_none()
+            && self.composer.text.is_empty()
+        {
+            let preferred = self.t3.as_ref().and_then(T3Source::preferred_project);
+            if let Some((environment, project)) = preferred {
+                self.new_remote_chat(environment, project);
+            }
+        }
         self.poll_remote(ctx);
         let Some(t3) = self.t3.as_mut() else { return };
         if self.view != View::Remote {
@@ -1182,15 +1234,19 @@ impl BuknoApp {
             screens::setup::blocked(self, ui, full, &title, &detail);
             return;
         }
-        let needs_setup = self.mode == Mode::Real && self.setup.as_ref().is_none_or(|s| s.work_folder.is_none());
-        if needs_setup || self.show_setup {
-            ui.painter().rect_filled(full, 0.0, self.theme.color.surface_canvas);
-            screens::setup::show(self, ui, full);
-            return;
-        }
         if self.show_environments && self.t3.is_some() {
             ui.painter().rect_filled(full, 0.0, self.theme.color.surface_canvas);
             screens::environments::show(self, ui, full);
+            self.evidence.frame_end(&ctx, &mut self.transcript, &self.doc, &self.theme);
+            return;
+        }
+        let needs_setup = self.mode == Mode::Real
+            && self.setup.as_ref().is_none_or(|s| s.work_folder.is_none())
+            && self.t3.as_ref().and_then(|t| t.ready_environment()).is_none();
+        if needs_setup || self.show_setup {
+            ui.painter().rect_filled(full, 0.0, self.theme.color.surface_canvas);
+            screens::setup::show(self, ui, full);
+            self.evidence.frame_end(&ctx, &mut self.transcript, &self.doc, &self.theme);
             return;
         }
         self.shortcuts(&ctx);

@@ -1347,7 +1347,7 @@ fn review_empty_draft_keeps_its_revision() {
 
     let ctx = egui::Context::default();
     let paths = AppPaths { state_dir: state.clone(), work_dir: Some(work), overridden: true };
-    let mut app = BuknoApp::real(&ctx, paths, store);
+    let mut app = BuknoApp::direct(&ctx, paths, store);
     frames_until(&mut app, &ctx, vec![], |a| !a.chats.is_empty());
     app.select_chat(task);
     frames_until(&mut app, &ctx, vec![], |a| a.composer.revision == 40);
