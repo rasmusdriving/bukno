@@ -83,10 +83,16 @@ fn docks(app: &BuknoApp) -> Vec<Dock> {
         match &entry.state {
             OutboxState::Unconfirmed => out.push(Dock::Notice {
                 key: format!("unconfirmed:{}", entry.request.command_id),
-                text: format!(
-                    "Not confirmed: {} may not have reached T3, because the connection dropped before it answered. Sending again is safe; T3 runs it at most once.",
-                    entry.request.describe().to_lowercase()
-                ),
+                text: match &entry.note {
+                    Some(note) => format!(
+                        "Not confirmed: {note} {} may or may not have run. Sending again is safe; T3 runs it at most once.",
+                        entry.request.describe()
+                    ),
+                    None => format!(
+                        "Not confirmed: {} may not have reached T3, because the connection dropped before it answered. Sending again is safe; T3 runs it at most once.",
+                        entry.request.describe().to_lowercase()
+                    ),
+                },
                 problem: true,
                 actions: vec!["Send again", "Dismiss"],
             }),
@@ -616,7 +622,21 @@ pub fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
         match dock {
             Dock::Request(request, count) => {
                 let key = format!("request:{}", request.request_id);
+                // Answers belong to one request; a later one starts empty,
+                // even when it reuses a question ID.
+                if app.remote_answers_request.as_deref() != Some(request.request_id.as_str()) {
+                    app.extra.answers.clear();
+                    app.remote_answers_request = Some(request.request_id.clone());
+                }
                 let view = decision_view(&request, task, in_flight(app, &key));
+                // T3 dismisses only questions answered by message; a live
+                // question can be ended by stopping the turn instead.
+                let decline_label = match &request.kind {
+                    PendingKind::Question { message_mode, .. } if !*message_mode && request.capability != "message" => {
+                        Some("Stop")
+                    }
+                    _ => None,
+                };
                 let mut answers = std::mem::take(&mut app.extra.answers);
                 let action = decision::show(
                     ui,
@@ -628,6 +648,7 @@ pub fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                     &project,
                     &protection,
                     &mut answers,
+                    decline_label,
                 );
                 app.extra.answers = answers;
                 if count > 1 {
@@ -649,9 +670,15 @@ pub fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                     (Some(CardAction::Decline), PendingKind::Approval { .. }) => {
                         Some(Outgoing::Approve { thread_id, request_id, decision: "decline".into() })
                     }
-                    (Some(CardAction::Decline), PendingKind::Question { .. }) => {
+                    (Some(CardAction::Decline), PendingKind::Question { .. }) if decline_label.is_none() => {
                         Some(Outgoing::Dismiss { thread_id, request_id })
                     }
+                    (Some(CardAction::Decline), PendingKind::Question { .. }) => app
+                        .t3
+                        .as_ref()
+                        .and_then(|t| t.open_thread())
+                        .and_then(|t| t.active_run.clone())
+                        .map(|run_id| Outgoing::Interrupt { thread_id, run_id }),
                     (Some(CardAction::Answers(given)), PendingKind::Question { questions, .. }) => {
                         Some(Outgoing::Answer { thread_id, request_id, answers: answers_for(questions, &given) })
                     }
@@ -785,7 +812,13 @@ pub fn new_chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
         })
     });
     if let Some(entry) = unconfirmed {
-        let text = "Not confirmed: the new chat may not have reached T3, because the connection dropped before it answered. Sending again is safe; T3 starts it at most once.";
+        let text = match &entry.note {
+            Some(note) => {
+                format!("Not confirmed: {note} The new chat may or may not have started. Sending again is safe; T3 starts it at most once.")
+            }
+            None => "Not confirmed: the new chat may not have reached T3, because the connection dropped before it answered. Sending again is safe; T3 starts it at most once.".to_owned(),
+        };
+        let text = text.as_str();
         let actions = ["Send again", "Dismiss"];
         let h = notice_height(ui, &theme, column.width(), text, actions.len());
         let rect = Rect::from_min_size(pos2(column.left(), meta_y + 30.0), vec2(column.width(), h));

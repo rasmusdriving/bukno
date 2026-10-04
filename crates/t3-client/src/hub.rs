@@ -115,6 +115,15 @@ pub enum OutboxState {
 pub struct OutboxEntry {
     pub request: CommandRequest,
     pub state: OutboxState,
+    /// Why an unconfirmed command is in doubt, when T3 said something.
+    pub note: Option<String>,
+}
+
+impl OutboxEntry {
+    /// Still waiting for an answer, or in doubt.
+    pub fn unsettled(&self) -> bool {
+        matches!(self.state, OutboxState::Sending | OutboxState::Unconfirmed)
+    }
 }
 
 /// Commands kept for the view; older settled ones are dropped.
@@ -241,7 +250,7 @@ impl Hub {
         });
         let hub = Self { runtime, shared };
         for environment in saved {
-            spawn_environment(&hub.shared, hub.runtime.handle(), environment, None);
+            spawn_environment(&hub.shared, hub.runtime.handle(), environment, None, Vec::new());
         }
         hub
     }
@@ -377,16 +386,27 @@ impl Hub {
             }
             // Re-pairing replaces the running task, which then uses the new
             // sign-in. The chat open on screen stays open on the new task.
-            let open = shared
-                .views
-                .lock()
-                .unwrap()
-                .get(&saved.environment_id)
-                .and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
+            let (open, carried) = {
+                let views = shared.views.lock().unwrap();
+                let view = views.get(&saved.environment_id);
+                let open = view.and_then(|v| v.thread.as_ref().map(|t| t.thread_id.clone()));
+                // Commands still in doubt keep their IDs on the new task, so
+                // they are settled or sent again with the same ones.
+                let carried: Vec<OutboxEntry> = view
+                    .map(|v| {
+                        v.outbox
+                            .iter()
+                            .filter(|e| e.unsettled())
+                            .map(|e| OutboxEntry { state: OutboxState::Unconfirmed, ..e.clone() })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (open, carried)
+            };
             if let Some((_, previous)) = shared.tasks.lock().unwrap().remove(&saved.environment_id) {
                 let _ = previous.send(EnvCommand::Forget);
             }
-            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone(), open);
+            spawn_environment(&shared, &tokio::runtime::Handle::current(), saved.clone(), open, carried);
             shared.set_pairing(PairingStatus::Paired { environment_id: saved.environment_id, label: saved.label });
         });
     }
@@ -401,12 +421,13 @@ fn spawn_environment(
     handle: &tokio::runtime::Handle,
     saved: SavedEnvironment,
     open_thread: Option<String>,
+    outbox: Vec<OutboxEntry>,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
     let generation = shared.next_generation.fetch_add(1, Ordering::SeqCst);
     shared.tasks.lock().unwrap().insert(saved.environment_id.clone(), (generation, tx));
     shared.publish(generation, EnvironmentView::new(saved.clone()));
-    handle.spawn(run_environment(shared.clone(), generation, saved, open_thread, rx));
+    handle.spawn(run_environment(shared.clone(), generation, saved, open_thread, outbox, rx));
 }
 
 impl EnvironmentView {
@@ -475,7 +496,7 @@ impl EnvState {
 
     fn record(&mut self, request: CommandRequest, state: OutboxState) {
         self.outbox.retain(|e| e.request.command_id != request.command_id);
-        self.outbox.push(OutboxEntry { request, state });
+        self.outbox.push(OutboxEntry { request, state, note: None });
         // Drop the oldest settled entries; never one still in doubt.
         while self.outbox.len() > OUTBOX_KEEP {
             let Some(at) =
@@ -742,6 +763,7 @@ async fn run_environment(
     generation: u64,
     saved: SavedEnvironment,
     open_thread: Option<String>,
+    outbox: Vec<OutboxEntry>,
     mut commands: mpsc::UnboundedReceiver<EnvCommand>,
 ) {
     let log = shared.log.clone();
@@ -757,7 +779,7 @@ async fn run_environment(
         thread_error: None,
         history_pending: None,
         history_error: None,
-        outbox: Vec::new(),
+        outbox,
         connections: 0,
         requests_sent: 0,
         unknown_frames: 0,
@@ -892,19 +914,40 @@ fn apply_reply(state: &mut EnvState, reply: CommandReply) {
     if !matches!(entry.state, OutboxState::Sending | OutboxState::Unconfirmed) {
         return;
     }
-    entry.state = match reply.result {
-        Ok(value) => OutboxState::Accepted {
-            observed: false,
-            thread_id: value.get("threadId").and_then(Value::as_str).map(str::to_owned),
-        },
-        // The socket went before the reply: it may or may not have run.
-        Err(T3Error::Disconnected { .. }) => OutboxState::Unconfirmed,
-        Err(T3Error::SignInRejected) => OutboxState::Rejected(
-            "T3 refused this computer's sign-in for sending. Pair the server again to send from Bukno.".into(),
+    // A message can be stored by T3 before a later step fails (a launch
+    // creates the chat, stores the message, then prepares the run), and a
+    // server defect says nothing about what ran. Those stay in doubt: they
+    // are settled from the chat, or sent again with the same IDs, which T3
+    // answers with the first outcome. Only an authorization refusal, or a
+    // refusal of a command that carries no message, is final.
+    let carries_message = entry.request.message_id().is_some();
+    let (state, note) = match reply.result {
+        Ok(value) => (
+            OutboxState::Accepted {
+                observed: false,
+                thread_id: value.get("threadId").and_then(Value::as_str).map(str::to_owned),
+            },
+            None,
         ),
-        Err(T3Error::Rpc { detail }) => OutboxState::Rejected(format!("T3 refused it: {}", short_reason(&detail))),
-        Err(other) => OutboxState::Rejected(other.user_message()),
+        // The socket went before the reply: it may or may not have run.
+        Err(T3Error::Disconnected { .. }) => (OutboxState::Unconfirmed, None),
+        Err(T3Error::SignInRejected) => (
+            OutboxState::Rejected(
+                "T3 refused this computer's sign-in for sending. Pair the server again to send from Bukno.".into(),
+            ),
+            None,
+        ),
+        Err(T3Error::Rpc { detail }) if carries_message || detail.contains("server defect") => {
+            (OutboxState::Unconfirmed, Some(format!("T3 reported a problem: {}", short_reason(&detail))))
+        }
+        Err(T3Error::Rpc { detail }) => {
+            (OutboxState::Rejected(format!("T3 refused it: {}", short_reason(&detail))), None)
+        }
+        Err(other) if carries_message => (OutboxState::Unconfirmed, Some(other.user_message())),
+        Err(other) => (OutboxState::Rejected(other.user_message()), None),
     };
+    entry.state = state;
+    entry.note = note;
 }
 
 /// `orchestration.dispatchCommand: SomeError: the message` as `the message`.

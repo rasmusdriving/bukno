@@ -722,6 +722,7 @@ fn chat(app: &mut BuknoApp, ui: &mut Ui, body: Rect) {
                     folder.as_deref().unwrap_or(""),
                     protection,
                     &mut answers,
+                    None,
                 );
                 app.extra.answers = answers;
                 if count > 1 {

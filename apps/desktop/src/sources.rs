@@ -169,7 +169,7 @@ impl T3Source {
         self.client.last_open = Some((chat.environment.clone(), chat.thread.clone()));
         self.open = Some(chat);
         self.built = None;
-        self.save();
+        let _ = self.save();
     }
 
     pub fn close_chat(&mut self) {
@@ -178,7 +178,7 @@ impl T3Source {
         }
         self.built = None;
         if self.client.last_open.take().is_some() {
-            self.save();
+            let _ = self.save();
         }
     }
 
@@ -208,7 +208,7 @@ impl T3Source {
     pub fn save_drafts(&mut self, now: f64, debounce: f64) -> bool {
         match self.dirty_since {
             Some(since) if now - since >= debounce => {
-                self.save();
+                let _ = self.save();
                 false
             }
             Some(_) => true,
@@ -216,7 +216,7 @@ impl T3Source {
         }
     }
 
-    fn save(&mut self) {
+    fn save(&mut self) -> Result<(), String> {
         self.dirty_since = None;
         self.client.version = 1;
         let result = serde_json::to_vec_pretty(&self.client).map_err(|e| e.to_string()).and_then(|bytes| {
@@ -224,7 +224,8 @@ impl T3Source {
             std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
             std::fs::rename(&temp, &self.state_file).map_err(|e| e.to_string())
         });
-        self.save_error = result.err();
+        self.save_error = result.clone().err();
+        result
     }
 
     /// Send a command to the environment; returns its command ID.
@@ -237,7 +238,15 @@ impl T3Source {
 
     /// Send a message or new chat from the composer with this draft key, and
     /// keep it on disk until T3 settles it.
-    pub fn send_tracked(&mut self, environment: &str, key: &str, draft: &str, outgoing: Outgoing) -> String {
+    /// Nothing is sent unless the send is on disk first: a send T3 runs
+    /// whose IDs were never saved could be sent again after a restart.
+    pub fn send_tracked(
+        &mut self,
+        environment: &str,
+        key: &str,
+        draft: &str,
+        outgoing: Outgoing,
+    ) -> Result<String, String> {
         let request = CommandRequest::new(outgoing);
         let id = request.command_id.clone();
         self.client.pending.push(PendingSend {
@@ -246,9 +255,24 @@ impl T3Source {
             draft: draft.to_owned(),
             request: request.clone(),
         });
-        self.save();
+        if let Err(e) = self.save() {
+            self.client.pending.retain(|p| p.request.command_id != id);
+            return Err(e);
+        }
         self.hub.dispatch(environment, request);
-        id
+        Ok(id)
+    }
+
+    /// Hand a command the client lost (re-pairing replaced its task) back as unconfirmed.
+    pub fn adopt(&self, environment: &str, request: CommandRequest) {
+        self.hub.adopt(environment, request);
+    }
+
+    /// Write anything not yet on disk, now.
+    pub fn flush(&mut self) {
+        if self.dirty_since.is_some() {
+            let _ = self.save();
+        }
     }
 
     pub fn pending_sends(&self) -> &[PendingSend] {
@@ -259,7 +283,7 @@ impl T3Source {
         let before = self.client.pending.len();
         self.client.pending.retain(|p| p.request.command_id != command_id);
         if self.client.pending.len() != before {
-            self.save();
+            let _ = self.save();
         }
     }
 

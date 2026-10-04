@@ -180,6 +180,8 @@ pub struct BuknoApp {
     pub remote_seen: std::collections::HashSet<String>,
     /// Commands for the open T3 chat's cards, so a card shows "Sending…".
     pub remote_answers: HashMap<String, String>,
+    /// The request the typed question answers belong to.
+    pub remote_answers_request: Option<String>,
     /// Show the T3 servers screen (Add environment and status).
     pub show_environments: bool,
     /// Which T3 projects are folded open in the sidebar, by (environment, project).
@@ -279,6 +281,7 @@ impl BuknoApp {
             remote_new: None,
             remote_seen: std::collections::HashSet::new(),
             remote_answers: HashMap::new(),
+            remote_answers_request: None,
             show_environments: false,
             t3_open_projects: HashMap::new(),
             remote_draft_revision: 0,
@@ -622,8 +625,11 @@ impl BuknoApp {
             }
             _ => return,
         };
-        if let Some(t3) = self.t3.as_mut() {
-            t3.send_tracked(&environment, &key, &body, outgoing);
+        if let Some(t3) = self.t3.as_mut()
+            && let Err(e) = t3.send_tracked(&environment, &key, &body, outgoing)
+        {
+            self.notice = Some(format!("Not sent, because Bukno could not save it first ({e}). Your draft is kept."));
+            self.extra.notice_problem = true;
         }
     }
 
@@ -674,10 +680,14 @@ impl BuknoApp {
         let Some(t3) = self.t3.as_mut() else { return };
         let known = t3.environment(&pending.environment).is_some();
         let Some(entry) = t3.command(&pending.environment, &id).cloned() else {
-            // Gone after it was seen (dismissed), or its server was removed.
-            if self.remote_seen.contains(&id) || !known {
+            if !known {
+                // Its server was removed: nothing can settle it any more.
                 t3.untrack(&id);
                 self.remote_seen.remove(&id);
+            } else if self.remote_seen.contains(&id) {
+                // The client lost it (pairing again replaced its task). It is
+                // still in doubt: hand it back. Only Dismiss forgets a send.
+                t3.adopt(&pending.environment, pending.request.clone());
             }
             return;
         };
@@ -685,8 +695,6 @@ impl BuknoApp {
         if matches!(entry.state, OutboxState::Sending | OutboxState::Unconfirmed) {
             return;
         }
-        t3.untrack(&id);
-        self.remote_seen.remove(&id);
         let here = self.remote_draft_key().as_ref() == Some(&pending.key);
         match entry.state {
             OutboxState::Rejected(reason) => {
@@ -695,22 +703,27 @@ impl BuknoApp {
                     self.notice = Some(reason);
                     self.extra.notice_problem = true;
                 }
-                if let Some(t3) = self.t3.as_ref() {
+                if let Some(t3) = self.t3.as_mut() {
+                    t3.untrack(&id);
                     t3.dismiss_command(&pending.environment, &id);
                 }
+                self.remote_seen.remove(&id);
             }
             OutboxState::Accepted { thread_id, .. } => {
-                // Clear exactly the text that was sent; anything else typed stays.
-                if here {
-                    if self.composer.text.trim() == pending.draft {
-                        self.composer.text.clear();
-                        self.composer.revision += 1;
-                    }
-                } else if let Some(t3) = self.t3.as_mut()
-                    && t3.draft(&pending.key).trim() == pending.draft
-                {
-                    t3.set_draft(&pending.key, "", now);
+                // Clear exactly the text that was sent; anything else typed
+                // stays. The cleared draft and the settled send are written
+                // together, so a quit cannot keep one without the other.
+                if here && self.composer.text.trim() == pending.draft {
+                    self.composer.text.clear();
+                    self.composer.revision += 1;
                 }
+                if let Some(t3) = self.t3.as_mut() {
+                    if t3.draft(&pending.key).trim() == pending.draft {
+                        t3.set_draft(&pending.key, "", now);
+                    }
+                    t3.untrack(&id);
+                }
+                self.remote_seen.remove(&id);
                 if matches!(entry.request.outgoing, Outgoing::Launch { .. })
                     && here
                     && let Some(thread) = thread_id
@@ -1115,8 +1128,11 @@ impl BuknoApp {
             return;
         }
         self.flush_draft();
-        // A T3 draft is written now, not after the typing pause.
+        // T3 drafts are written now, not after the typing pause.
         self.keep_remote_draft();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.flush();
+        }
         if self.work_active() {
             self.quit = QuitFlow::Asking;
         } else {
@@ -1128,6 +1144,9 @@ impl BuknoApp {
     pub fn confirm_quit(&mut self) {
         self.flush_draft();
         self.keep_remote_draft();
+        if let Some(t3) = self.t3.as_mut() {
+            t3.flush();
+        }
         self.quit = QuitFlow::Closing;
         self.backend.send(UiCommand::Quit { stop: true });
     }

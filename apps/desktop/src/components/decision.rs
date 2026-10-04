@@ -114,6 +114,8 @@ fn questions_height(ui: &Ui, theme: &Theme, questions: &[Question], inner: f32) 
 
 /// Draw the card in `rect` (use [`height`] with the same `code_max`).
 /// `protection` says what enforces the action; `folder` is where it runs.
+/// `decline_label` replaces "Skip" or "Deny" where declining means something
+/// else, such as stopping a turn whose question cannot be skipped.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
@@ -125,6 +127,7 @@ pub fn show(
     folder: &str,
     protection: &str,
     answers: &mut HashMap<String, String>,
+    decline_label: Option<&str>,
 ) -> Option<CardAction> {
     let c = &theme.color;
     let id = card_id(decision);
@@ -231,7 +234,7 @@ pub fn show(
     let question = matches!(decision.kind, DecisionKind::Question { .. });
     let primary_text = if question { "Send answer" } else { "Allow once" };
     let primary = super::raised_primary(ui, theme, id.with("allow"), pos2(x, bar), primary_text, Some("↵"));
-    let decline_text = if question { "Skip" } else { "Deny" };
+    let decline_text = decline_label.unwrap_or(if question { "Skip" } else { "Deny" });
     let decline =
         super::flat_text_button(ui, theme, id.with("deny"), pos2(rect.right() - PAD, bar), decline_text, Some("Esc"));
     let mut allow = primary.clicked();
